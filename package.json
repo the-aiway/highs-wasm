@@ -3,22 +3,28 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
     "./st": "./dist/highs.st.mjs",
     "./mt": "./dist/highs.mt.mjs"
   },
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.mjs",
   "files": [
-    "dist/",
-    "src/"
+    "dist/"
   ],
   "sideEffects": false,
   "scripts": {
-    "build:st": "./build/build-st.sh",
-    "build:mt": "./build/build-mt.sh",
-    "build": "bun run build:st && bun run build:mt",
+    "build:wasm:st": "./build/build-st.sh",
+    "build:wasm:mt": "./build/build-mt.sh",
+    "build:wasm": "bun run build:wasm:st && bun run build:wasm:mt",
+    "build:js": "bun build ./src/index.ts --outdir dist --target browser --format esm --splitting --external '../dist/*.mjs' && mv dist/index.js dist/index.mjs && sed -i '' 's|../dist/highs|./highs|g' dist/index.mjs && cp src/index.ts dist/index.d.ts",
+    "build": "bun run build:wasm && bun run build:js",
     "test": "bun test src/",
-    "test:e2e": "bunx playwright test"
+    "test:e2e": "bunx playwright test",
+    "prepublishOnly": "bun run build"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
