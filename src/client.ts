@@ -9,6 +9,9 @@ import type {
   ObjectiveSense,
   SolveResult,
   SolverOptions,
+  ProgressUpdate,
+  StreamingSolve,
+  ProgressController,
 } from "./types.ts";
 
 interface SerializedResult {
@@ -18,10 +21,17 @@ interface SerializedResult {
   dualValues: number[];
 }
 
+interface StreamingHandler {
+  onProgress: (update: ProgressUpdate) => void;
+  onComplete: (result: SerializedResult) => void;
+  onError: (error: Error) => void;
+}
+
 export class SolverClient implements Disposable {
   #worker: Worker;
   #messageId = 0;
   #pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  #streamingHandlers = new Map<number, StreamingHandler>();
   #disposed = false;
   #initPromise: Promise<void>;
 
@@ -34,7 +44,28 @@ export class SolverClient implements Disposable {
     });
 
     this.#worker.onmessage = (e) => {
-      const { id, ok, result, error } = e.data;
+      const data = e.data;
+
+      // Handle streaming messages
+      if (data.type === "progress") {
+        const handler = this.#streamingHandlers.get(data.id);
+        if (handler) {
+          handler.onProgress(data.update);
+        }
+        return;
+      }
+
+      if (data.type === "complete") {
+        const handler = this.#streamingHandlers.get(data.id);
+        if (handler) {
+          this.#streamingHandlers.delete(data.id);
+          handler.onComplete(data.result);
+        }
+        return;
+      }
+
+      // Handle normal request/response
+      const { id, ok, result, error } = data;
       const handler = this.#pending.get(id);
       if (handler) {
         this.#pending.delete(id);
@@ -52,6 +83,12 @@ export class SolverClient implements Disposable {
         handler.reject(new Error(e.message));
       }
       this.#pending.clear();
+
+      // Error streaming handlers
+      for (const handler of this.#streamingHandlers.values()) {
+        handler.onError(new Error(e.message));
+      }
+      this.#streamingHandlers.clear();
     };
 
     // Initialize the solver
@@ -174,6 +211,134 @@ export class SolverClient implements Disposable {
   async version(): Promise<string> {
     await this.#initPromise;
     return this.#send("version") as Promise<string>;
+  }
+
+  solveStreaming(): StreamingSolve {
+    const id = this.#messageId++;
+    const updates: ProgressUpdate[] = [];
+    let cancelled = false;
+    let resolveWait: (() => void) | null = null;
+    let completed = false;
+    let resolveComplete: ((result: SerializedResult) => void) | null = null;
+    let rejectComplete: ((error: Error) => void) | null = null;
+
+    // Set up streaming handler
+    this.#streamingHandlers.set(id, {
+      onProgress: (update) => {
+        if (cancelled) return;
+        updates.push(update);
+        if (resolveWait) {
+          resolveWait();
+          resolveWait = null;
+        }
+      },
+      onComplete: (result) => {
+        completed = true;
+        if (resolveWait) {
+          resolveWait();
+          resolveWait = null;
+        }
+        if (resolveComplete) {
+          resolveComplete(result);
+        }
+      },
+      onError: (error) => {
+        completed = true;
+        if (resolveWait) {
+          resolveWait();
+          resolveWait = null;
+        }
+        if (rejectComplete) {
+          rejectComplete(error);
+        }
+      },
+    });
+
+    // Send command after init
+    this.#initPromise.then(() => {
+      this.#worker.postMessage({ id, cmd: "solveStreaming" });
+    });
+
+    // Create progress async iterator
+    const progress: ProgressController = {
+      cancel: () => {
+        cancelled = true;
+        this.#send("cancelSolve").catch(() => {});
+        if (resolveWait) {
+          resolveWait();
+          resolveWait = null;
+        }
+      },
+
+      [Symbol.asyncIterator]: () => {
+        let index = 0;
+        return {
+          next: async (): Promise<IteratorResult<ProgressUpdate>> => {
+            if (index < updates.length) {
+              return { value: updates[index++], done: false };
+            }
+
+            if (completed || cancelled) {
+              return { value: undefined as any, done: true };
+            }
+
+            await new Promise<void>((resolve) => {
+              resolveWait = resolve;
+            });
+
+            if (index < updates.length) {
+              return { value: updates[index++], done: false };
+            }
+
+            return { value: undefined as any, done: true };
+          },
+        };
+      },
+    };
+
+    // Create solution promise
+    const solution = new Promise<SolveResult>((resolve, reject) => {
+      resolveComplete = (result) => {
+        const primalValues = new Float64Array(result.primalValues);
+        const dualValues = new Float64Array(result.dualValues);
+
+        resolve({
+          status: result.status as any,
+          objectiveValue: result.objectiveValue,
+
+          value(v: VarRef): number {
+            return primalValues[v] ?? NaN;
+          },
+
+          reducedCost(_v: VarRef): number {
+            return NaN;
+          },
+
+          dual(c: ConRef): number {
+            return dualValues[c] ?? NaN;
+          },
+
+          slack(_c: ConRef): number {
+            return NaN;
+          },
+
+          primalValues(): Float64Array {
+            return primalValues.slice();
+          },
+
+          dualValues(): Float64Array {
+            return dualValues.slice();
+          },
+
+          info(_key: string): number | string {
+            return NaN;
+          },
+        });
+      };
+      rejectComplete = reject;
+    });
+
+    return { solution, progress };
   }
 
   [Symbol.dispose]() {

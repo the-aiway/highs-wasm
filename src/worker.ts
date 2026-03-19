@@ -8,6 +8,7 @@ import type {
   BulkConstraintsOptions,
   ObjectiveSense,
   SolveResult,
+  ProgressUpdate,
 } from "./types.ts";
 
 type WorkerMessage =
@@ -19,16 +20,21 @@ type WorkerMessage =
   | { id: number; cmd: "setObjectiveSense"; sense: ObjectiveSense }
   | { id: number; cmd: "setOption"; name: string; value: number | string }
   | { id: number; cmd: "solve" }
+  | { id: number; cmd: "solveStreaming" }
+  | { id: number; cmd: "cancelSolve" }
   | { id: number; cmd: "clearModel" }
   | { id: number; cmd: "dispose" }
   | { id: number; cmd: "version" };
 
 type WorkerResponse =
   | { id: number; ok: true; result?: unknown }
-  | { id: number; ok: false; error: string };
+  | { id: number; ok: false; error: string }
+  | { id: number; type: "progress"; update: ProgressUpdate }
+  | { id: number; type: "complete"; result: unknown };
 
 let solver: Solver | null = null;
 let modulePromise: Promise<HighsModule> | null = null;
+let activeStreamingCancel: (() => void) | null = null;
 
 async function loadModule(variant: "st" | "mt"): Promise<HighsModule> {
   // Dynamic import based on variant
@@ -116,6 +122,43 @@ async function handleMessage(msg: WorkerMessage): Promise<WorkerResponse> {
           dualValues: Array.from(result.dualValues()),
         };
         return { id, ok: true, result: serialized };
+      }
+
+      case "solveStreaming": {
+        if (!solver) throw new Error("Solver not initialized");
+
+        const { solution, progress } = solver.solveStreaming();
+        activeStreamingCancel = () => progress.cancel();
+
+        // Stream progress updates back to main thread
+        (async () => {
+          for await (const update of progress) {
+            self.postMessage({ id, type: "progress", update });
+          }
+        })();
+
+        // Wait for solution and send completion
+        const result = await solution;
+        activeStreamingCancel = null;
+
+        const serialized = {
+          status: result.status,
+          objectiveValue: result.objectiveValue,
+          primalValues: Array.from(result.primalValues()),
+          dualValues: Array.from(result.dualValues()),
+        };
+
+        // Return null here - we'll send completion separately
+        self.postMessage({ id, type: "complete", result: serialized });
+        return { id, ok: true };
+      }
+
+      case "cancelSolve": {
+        if (activeStreamingCancel) {
+          activeStreamingCancel();
+          activeStreamingCancel = null;
+        }
+        return { id, ok: true };
       }
 
       case "clearModel": {
