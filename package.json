@@ -1,10 +1,29 @@
 {
   "name": "highs-wasm",
-  "module": "index.ts",
+  "version": "0.1.0",
   "type": "module",
-  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./st": "./dist/highs.st.mjs",
+    "./mt": "./dist/highs.mt.mjs"
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "dist/",
+    "src/"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build:st": "./build/build-st.sh",
+    "build:mt": "./build/build-mt.sh",
+    "build": "bun run build:st && bun run build:mt",
+    "test": "bun test src/",
+    "test:e2e": "bunx playwright test"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@playwright/test": "^1.58.2",
+    "@types/bun": "latest",
+    "playwright": "^1.58.2"
   },
   "peerDependencies": {
     "typescript": "^5"
