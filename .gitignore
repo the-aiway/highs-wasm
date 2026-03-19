@@ -9,6 +9,7 @@ dist
 # build artifacts (cmake)
 build/st/
 build/mt/
+build/debug/
 
 # test artifacts
 test-results/

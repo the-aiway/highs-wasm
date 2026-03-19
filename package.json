@@ -8,7 +8,8 @@
       "import": "./dist/index.mjs"
     },
     "./st": "./dist/highs.st.mjs",
-    "./mt": "./dist/highs.mt.mjs"
+    "./mt": "./dist/highs.mt.mjs",
+    "./debug": "./dist/highs.debug.mjs"
   },
   "types": "./dist/index.d.ts",
   "main": "./dist/index.mjs",
@@ -19,6 +20,7 @@
   "scripts": {
     "build:wasm:st": "./build/build-st.sh",
     "build:wasm:mt": "./build/build-mt.sh",
+    "build:wasm:debug": "./build/build-debug.sh",
     "build:wasm": "bun run build:wasm:st && bun run build:wasm:mt",
     "build:js": "bun build ./src/index.ts --outdir dist --target browser --format esm --splitting --external '../dist/*.mjs' && mv dist/index.js dist/index.mjs && sed -i '' 's|../dist/highs|./highs|g' dist/index.mjs && cp src/index.ts dist/index.d.ts",
     "build": "bun run build:wasm && bun run build:js",
