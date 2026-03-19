@@ -6,6 +6,8 @@ A modern WebAssembly build of the [HiGHS](https://github.com/ERGO-Code/HiGHS) li
 
 ```bash
 npm install highs-wasm
+# or
+bun add github:abelcha/highs-wasm
 ```
 
 ## Quick Start
@@ -31,7 +33,7 @@ solver.addConstraint({
 solver.setObjectiveSense("maximize");
 const result = solver.solve();
 
-if (result.status === "Optimal") {
+if (result.isOptimal) {
   console.log("Objective:", result.objectiveValue);
   console.log("x =", result.value(x));
   console.log("y =", result.value(y));
@@ -40,12 +42,14 @@ if (result.status === "Optimal") {
 
 ## Features
 
-- **No crashes** - Proper emscripten config with memory growth, large stack
-- **Builder API** - Programmatic model building with TypeScript types
-- **Bulk operations** - Typed array input for large models
-- **Non-blocking** - Worker-based solving keeps UI responsive
-- **MIP progress** - Stream optimization progress for long solves
-- **Zero config** - Single-file ESM, works in any bundler or plain `<script type="module">`
+- **No crashes** — Proper emscripten config with memory growth, large stack
+- **Builder API** — Programmatic model building with TypeScript types
+- **Bulk operations** — Typed array input for large models with integrality
+- **Non-blocking** — Worker-based solving keeps UI responsive
+- **MIP progress** — Stream optimization progress for long solves
+- **Error handling** — Throws typed errors for infeasible/unbounded models
+- **Warm starting** — Save and restore basis for fast re-solves
+- **Zero config** — Single-file ESM, works in any bundler or plain `<script type="module">`
 
 ## API
 
@@ -62,6 +66,9 @@ const solver = await create({ variant: "st" });
 
 // Force multi-threaded (requires crossOriginIsolated)
 const solver = await create({ variant: "mt" });
+
+// Enable verbose logging
+const solver = await create({ verbose: true });
 ```
 
 ### Variables
@@ -76,11 +83,12 @@ const x = solver.addVar({
   name: "x",       // optional name
 });
 
-// Bulk add (faster for large models)
+// Bulk add with integrality (faster for large models)
 const firstVar = solver.addVars({
   lb: new Float64Array(1000),
-  ub: new Float64Array(1000).fill(Infinity),
+  ub: new Float64Array(1000).fill(1),
   costs: Float64Array.from(costData),
+  types: new Int32Array(1000).fill(1), // 1 = integer
 });
 // Variables are firstVar, firstVar+1, firstVar+2, ...
 ```
@@ -117,24 +125,55 @@ solver.addConstraints({
 
 ```typescript
 solver.setObjectiveSense("maximize"); // or "minimize" (default)
-solver.setOption("time_limit", 60);
-solver.setOption("mip_rel_gap", 0.01);
 
-const result = solver.solve();
+// Solve with options
+const result = solver.solve({
+  timeLimit: 60,
+  presolve: "on",       // "on" | "off" | "choose"
+  mipRelGap: 0.01,
+  mipMaxNodes: 10000,
+  threads: 4,           // MT build only
+});
 
-result.status;           // "Optimal" | "Infeasible" | "Unbounded" | ...
-result.objectiveValue;   // objective function value
-result.value(x);         // primal value for variable
-result.dual(constraint); // dual value for constraint
-result.primalValues();   // Float64Array of all primal values
-result.dualValues();     // Float64Array of all dual values
-result.info("simplex_iteration_count"); // solver statistics
+// Check result
+if (result.isOptimal) {
+  result.objectiveValue;   // objective function value
+  result.value(x);         // primal value for variable
+  result.dual(constraint); // dual value for constraint
+  result.primalValues();   // Float64Array of all primal values
+  result.dualValues();     // Float64Array of all dual values
+  result.info("simplex_iteration_count"); // solver statistics
+}
+```
+
+### Error Handling
+
+```typescript
+import { create, InfeasibleError, UnboundedError, HiGHSError } from "highs-wasm";
+
+try {
+  const result = solver.solve({ timeLimit: 5 });
+
+  if (!result.isOptimal) {
+    // Solver hit a limit but found a feasible solution
+    result.objectiveValue;
+    result.info("mip_gap");
+  }
+} catch (e) {
+  if (e instanceof InfeasibleError) {
+    console.log("Model is infeasible");
+  } else if (e instanceof UnboundedError) {
+    console.log("Model is unbounded");
+  } else if (e instanceof HiGHSError) {
+    console.log("Solve failed:", e.status);
+  }
+}
 ```
 
 ### Streaming Solve (MIP Progress)
 
 ```typescript
-const { solution, progress } = solver.solveStreaming();
+const { solution, progress } = solver.solveStreaming({ timeLimit: 30 });
 
 for await (const update of progress) {
   console.log(`Nodes: ${update.nodes}, Gap: ${update.gap.toFixed(2)}%`);
@@ -148,21 +187,56 @@ for await (const update of progress) {
 const result = await solution;
 ```
 
-### String-Based Input (LP/MPS)
+### Model Modification
 
 ```typescript
-const lpString = `
-Maximize
-  obj: x + 2 y
-Subject To
-  c1: x + y <= 4
-Bounds
-  0 <= x <= 2
-  0 <= y <= 3
-End
-`;
+// Modify and re-solve without rebuilding from scratch
+solver.changeColCost(x, 5.0);
+solver.changeColBounds(x, { lb: 0, ub: 100 });
+solver.changeRowBounds(capacity, { lb: 10, ub: 50 });
+solver.changeCoeff(capacity, x, 2.5);
 
-const result = solver.solveModel(lpString, "lp"); // or "mps"
+// Delete rows or columns
+solver.deleteRows([0, 2, 5]);
+solver.deleteCols([1, 3]);
+
+// Re-solve (warm-starts from previous basis if available)
+const result2 = solver.solve();
+```
+
+### Warm Starting
+
+```typescript
+// Extract basis after a solve
+const basis = result.getBasis();
+
+// Later, on a similar model:
+solver.setBasis(basis);
+const result2 = solver.solve();  // starts from provided basis
+```
+
+### Clear / Reset
+
+```typescript
+// Wipe the current model, keep options
+solver.clear();
+
+// Reset everything including options
+solver.reset();
+```
+
+### Load Model From String
+
+```typescript
+// Load without solving
+solver.loadModel(lpString, "lp");  // or "mps"
+console.log(solver.getNumCols(), solver.getNumRows());
+
+// Solve
+const result = solver.solve();
+
+// Or load and solve in one call
+const result = solver.solveModel(lpString, "lp");
 ```
 
 ### Cleanup
@@ -232,7 +306,7 @@ Minimum: Chrome 91+, Firefox 89+, Safari 16.4+, Node 16+
 # Install emscripten first
 # https://emscripten.org/docs/getting_started/downloads.html
 
-git clone --recursive https://github.com/user/highs-wasm
+git clone --recursive https://github.com/abelcha/highs-wasm
 cd highs-wasm
 bun install
 
@@ -251,4 +325,4 @@ bun run test:e2e
 
 ## License
 
-MIT - Same as HiGHS
+MIT — Same as HiGHS

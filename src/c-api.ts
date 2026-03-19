@@ -45,6 +45,7 @@ export interface HighsCApi {
   run(highs: number): number;
   clear(highs: number): number;
   clearModel(highs: number): number;
+  clearSolver(highs: number): number;
 
   // Model I/O
   readModel(highs: number, filename: number): number;
@@ -129,6 +130,8 @@ export interface HighsCApi {
     index: number,
     value: number
   ): number;
+  deleteRowsBySet(highs: number, numSetEntries: number, set: number): number;
+  deleteColsBySet(highs: number, numSetEntries: number, set: number): number;
 
   // Model modification
   changeColCost(highs: number, col: number, cost: number): number;
@@ -138,6 +141,7 @@ export interface HighsCApi {
   changeObjectiveSense(highs: number, sense: number): number;
   changeObjectiveOffset(highs: number, offset: number): number;
   changeColIntegrality(highs: number, col: number, integrality: number): number;
+  changeColsIntegralityByRange(highs: number, fromCol: number, toCol: number, integrality: number): number;
 
   // Model info
   getNumCol(highs: number): number;
@@ -154,6 +158,7 @@ export interface HighsCApi {
     rowDual: number
   ): number;
   getBasis(highs: number, colStatus: number, rowStatus: number): number;
+  setBasis(highs: number, colStatus: number, rowStatus: number): number;
   getModelStatus(highs: number): number;
 
   // Info values
@@ -190,6 +195,7 @@ export function createCApi(module: HighsModule): HighsCApi {
     run: cwrap("Highs_run", "number", ["number"]),
     clear: cwrap("Highs_clear", "number", ["number"]),
     clearModel: cwrap("Highs_clearModel", "number", ["number"]),
+    clearSolver: cwrap("Highs_clearSolver", "number", ["number"]),
 
     // Model I/O
     readModel: cwrap("Highs_readModel", "number", ["number", "number"]),
@@ -220,6 +226,8 @@ export function createCApi(module: HighsModule): HighsCApi {
     addRows: cwrap("Highs_addRows", "number", [
       "number", "number", "number", "number", "number", "number", "number", "number"
     ]),
+    deleteRowsBySet: cwrap("Highs_deleteRowsBySet", "number", ["number", "number", "number"]),
+    deleteColsBySet: cwrap("Highs_deleteColsBySet", "number", ["number", "number", "number"]),
 
     // Model modification
     changeColCost: cwrap("Highs_changeColCost", "number", ["number", "number", "number"]),
@@ -229,6 +237,7 @@ export function createCApi(module: HighsModule): HighsCApi {
     changeObjectiveSense: cwrap("Highs_changeObjectiveSense", "number", ["number", "number"]),
     changeObjectiveOffset: cwrap("Highs_changeObjectiveOffset", "number", ["number", "number"]),
     changeColIntegrality: cwrap("Highs_changeColIntegrality", "number", ["number", "number", "number"]),
+    changeColsIntegralityByRange: cwrap("Highs_changeColsIntegralityByRange", "number", ["number", "number", "number", "number"]),
 
     // Model info
     getNumCol: cwrap("Highs_getNumCol", "number", ["number"]),
@@ -241,6 +250,7 @@ export function createCApi(module: HighsModule): HighsCApi {
       "number", "number", "number", "number", "number"
     ]),
     getBasis: cwrap("Highs_getBasis", "number", ["number", "number", "number"]),
+    setBasis: cwrap("Highs_setBasis", "number", ["number", "number", "number"]),
     getModelStatus: cwrap("Highs_getModelStatus", "number", ["number"]),
 
     // Info values

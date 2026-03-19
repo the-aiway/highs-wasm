@@ -8,23 +8,96 @@ import type {
   BulkConstraintsOptions,
   ObjectiveSense,
   SolveResult,
+  SolveOptions,
   SolverOptions,
   ProgressUpdate,
   StreamingSolve,
   ProgressController,
+  Basis,
+  SolveStatus,
+} from "./types.ts";
+import {
+  HiGHSError,
+  InfeasibleError,
+  UnboundedError,
+  TimeLimitError,
+  ModelError,
+  isOptimalStatus,
 } from "./types.ts";
 
 interface SerializedResult {
-  status: string;
+  status: SolveStatus;
+  isOptimal: boolean;
   objectiveValue: number;
   primalValues: number[];
   dualValues: number[];
+  basis: Basis;
 }
 
 interface StreamingHandler {
   onProgress: (update: ProgressUpdate) => void;
   onComplete: (result: SerializedResult) => void;
   onError: (error: Error) => void;
+}
+
+function reconstructResult(result: SerializedResult): SolveResult {
+  const primalValues = new Float64Array(result.primalValues);
+  const dualValues = new Float64Array(result.dualValues);
+
+  return {
+    status: result.status,
+    isOptimal: result.isOptimal,
+    objectiveValue: result.objectiveValue,
+
+    value(v: VarRef): number {
+      return primalValues[v] ?? NaN;
+    },
+
+    reducedCost(_v: VarRef): number {
+      return NaN; // Not transferred
+    },
+
+    dual(c: ConRef): number {
+      return dualValues[c] ?? NaN;
+    },
+
+    slack(_c: ConRef): number {
+      return NaN; // Not transferred
+    },
+
+    primalValues(): Float64Array {
+      return primalValues.slice();
+    },
+
+    dualValues(): Float64Array {
+      return dualValues.slice();
+    },
+
+    getBasis(): Basis {
+      return result.basis;
+    },
+
+    info(_key: string): number | string {
+      return NaN; // Not available through worker
+    },
+  };
+}
+
+function reconstructError(errorClass: string | undefined, message: string): Error {
+  switch (errorClass) {
+    case "InfeasibleError":
+      return new InfeasibleError(message);
+    case "UnboundedError":
+      return new UnboundedError(message);
+    case "TimeLimitError":
+      return new TimeLimitError(message);
+    case "ModelError":
+      return new ModelError(message);
+    case "HiGHSError":
+      return new HiGHSError("Unknown", message);
+    default:
+      return new Error(message);
+  }
 }
 
 export class SolverClient implements Disposable {
@@ -65,14 +138,14 @@ export class SolverClient implements Disposable {
       }
 
       // Handle normal request/response
-      const { id, ok, result, error } = data;
+      const { id, ok, result, error, errorClass } = data;
       const handler = this.#pending.get(id);
       if (handler) {
         this.#pending.delete(id);
         if (ok) {
           handler.resolve(result);
         } else {
-          handler.reject(new Error(error));
+          handler.reject(reconstructError(errorClass, error));
         }
       }
     };
@@ -92,7 +165,7 @@ export class SolverClient implements Disposable {
     };
 
     // Initialize the solver
-    this.#initPromise = this.#send("init", { variant });
+    this.#initPromise = this.#send("init", { variant, verbose: options.verbose });
   }
 
   async #send(cmd: string, params: Record<string, unknown> = {}): Promise<any> {
@@ -124,6 +197,7 @@ export class SolverClient implements Disposable {
         lb: options.lb.buffer,
         ub: options.ub.buffer,
         costs: options.costs?.buffer,
+        types: options.types?.buffer,
       },
     };
     return this.#send("addVars", msg) as Promise<VarRef>;
@@ -153,59 +227,81 @@ export class SolverClient implements Disposable {
     await this.#send("setObjectiveSense", { sense });
   }
 
-  async setOption(name: string, value: number | string): Promise<void> {
+  async setOption(name: string, value: number | string | boolean): Promise<void> {
     await this.#initPromise;
     await this.#send("setOption", { name, value });
   }
 
-  async solve(): Promise<SolveResult> {
+  async solve(opts: SolveOptions = {}): Promise<SolveResult> {
     await this.#initPromise;
-    const result = (await this.#send("solve")) as SerializedResult;
-
-    // Reconstruct the SolveResult interface
-    const primalValues = new Float64Array(result.primalValues);
-    const dualValues = new Float64Array(result.dualValues);
-
-    return {
-      status: result.status as any,
-      objectiveValue: result.objectiveValue,
-
-      value(v: VarRef): number {
-        return primalValues[v] ?? NaN;
-      },
-
-      reducedCost(_v: VarRef): number {
-        // Reduced costs not transferred in current impl
-        return NaN;
-      },
-
-      dual(c: ConRef): number {
-        return dualValues[c] ?? NaN;
-      },
-
-      slack(_c: ConRef): number {
-        // Slack not transferred in current impl
-        return NaN;
-      },
-
-      primalValues(): Float64Array {
-        return primalValues.slice();
-      },
-
-      dualValues(): Float64Array {
-        return dualValues.slice();
-      },
-
-      info(_key: string): number | string {
-        // Info not available through worker yet
-        return NaN;
-      },
-    };
+    const result = (await this.#send("solve", { options: opts })) as SerializedResult;
+    return reconstructResult(result);
   }
 
-  async clearModel(): Promise<void> {
+  async clear(): Promise<void> {
     await this.#initPromise;
-    await this.#send("clearModel");
+    await this.#send("clear");
+  }
+
+  async reset(): Promise<void> {
+    await this.#initPromise;
+    await this.#send("reset");
+  }
+
+  async loadModel(modelString: string, format: "lp" | "mps" = "lp"): Promise<void> {
+    await this.#initPromise;
+    await this.#send("loadModel", { modelString, format });
+  }
+
+  async solveModel(modelString: string, format: "lp" | "mps" = "lp"): Promise<SolveResult> {
+    await this.#initPromise;
+    const result = (await this.#send("solveModel", { modelString, format })) as SerializedResult;
+    return reconstructResult(result);
+  }
+
+  async setBasis(basis: Basis): Promise<void> {
+    await this.#initPromise;
+    await this.#send("setBasis", { basis });
+  }
+
+  async changeColCost(v: VarRef, cost: number): Promise<void> {
+    await this.#initPromise;
+    await this.#send("changeColCost", { v, cost });
+  }
+
+  async changeColBounds(v: VarRef, bounds: { lb?: number; ub?: number }): Promise<void> {
+    await this.#initPromise;
+    await this.#send("changeColBounds", { v, bounds });
+  }
+
+  async changeRowBounds(c: ConRef, bounds: { lb?: number; ub?: number }): Promise<void> {
+    await this.#initPromise;
+    await this.#send("changeRowBounds", { c, bounds });
+  }
+
+  async changeCoeff(c: ConRef, v: VarRef, value: number): Promise<void> {
+    await this.#initPromise;
+    await this.#send("changeCoeff", { c, v, value });
+  }
+
+  async deleteRows(indices: number[]): Promise<void> {
+    await this.#initPromise;
+    await this.#send("deleteRows", { indices });
+  }
+
+  async deleteCols(indices: number[]): Promise<void> {
+    await this.#initPromise;
+    await this.#send("deleteCols", { indices });
+  }
+
+  async getNumCols(): Promise<number> {
+    await this.#initPromise;
+    return this.#send("getNumCols") as Promise<number>;
+  }
+
+  async getNumRows(): Promise<number> {
+    await this.#initPromise;
+    return this.#send("getNumRows") as Promise<number>;
   }
 
   async version(): Promise<string> {
@@ -213,7 +309,7 @@ export class SolverClient implements Disposable {
     return this.#send("version") as Promise<string>;
   }
 
-  solveStreaming(): StreamingSolve {
+  solveStreaming(opts: SolveOptions = {}): StreamingSolve {
     const id = this.#messageId++;
     const updates: ProgressUpdate[] = [];
     let cancelled = false;
@@ -256,7 +352,7 @@ export class SolverClient implements Disposable {
 
     // Send command after init
     this.#initPromise.then(() => {
-      this.#worker.postMessage({ id, cmd: "solveStreaming" });
+      this.#worker.postMessage({ id, cmd: "solveStreaming", options: opts });
     });
 
     // Create progress async iterator
@@ -299,41 +395,7 @@ export class SolverClient implements Disposable {
     // Create solution promise
     const solution = new Promise<SolveResult>((resolve, reject) => {
       resolveComplete = (result) => {
-        const primalValues = new Float64Array(result.primalValues);
-        const dualValues = new Float64Array(result.dualValues);
-
-        resolve({
-          status: result.status as any,
-          objectiveValue: result.objectiveValue,
-
-          value(v: VarRef): number {
-            return primalValues[v] ?? NaN;
-          },
-
-          reducedCost(_v: VarRef): number {
-            return NaN;
-          },
-
-          dual(c: ConRef): number {
-            return dualValues[c] ?? NaN;
-          },
-
-          slack(_c: ConRef): number {
-            return NaN;
-          },
-
-          primalValues(): Float64Array {
-            return primalValues.slice();
-          },
-
-          dualValues(): Float64Array {
-            return dualValues.slice();
-          },
-
-          info(_key: string): number | string {
-            return NaN;
-          },
-        });
+        resolve(reconstructResult(result));
       };
       rejectComplete = reject;
     });

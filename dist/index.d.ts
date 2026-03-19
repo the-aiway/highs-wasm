@@ -11,16 +11,26 @@ export type {
   AddConstraintOptions,
   BulkVarsOptions,
   BulkConstraintsOptions,
+  SolveOptions,
   SolveResult,
+  Basis,
   ProgressUpdate,
   ProgressController,
   StreamingSolve,
   SolverOptions,
 } from "./types.ts";
 
+// Error classes
+export {
+  HiGHSError,
+  InfeasibleError,
+  UnboundedError,
+  TimeLimitError,
+  ModelError,
+} from "./types.ts";
+
 import { Solver } from "./solver.ts";
 import type { SolverOptions } from "./types.ts";
-import type { HighsModule } from "./c-api.ts";
 
 // Feature detection
 export function detect() {
@@ -57,7 +67,7 @@ export async function create(options: SolverOptions = {}): Promise<Solver> {
     : await import("../dist/highs.st.mjs");
 
   const module = await mod.default();
-  return new Solver(module);
+  return new Solver(module, options);
 }
 
 // Worker-based solver creation for browsers (non-blocking)

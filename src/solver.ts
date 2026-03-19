@@ -5,6 +5,7 @@ import {
   allocFloat64Array,
   allocInt32Array,
   readFloat64Array,
+  readInt32Array,
 } from "./c-api.ts";
 import type {
   VarRef,
@@ -14,21 +15,30 @@ import type {
   BulkVarsOptions,
   BulkConstraintsOptions,
   SolveResult,
+  SolveOptions,
+  SolverOptions,
   ObjectiveSense,
   ProgressUpdate,
   StreamingSolve,
   ProgressController,
+  Basis,
+  SolveStatus,
 } from "./types.ts";
 import {
   HighsStatus,
   HighsVarType,
-  HighsObjSense,
-  HighsMatrixFormat,
   HighsInfoType,
   HighsCallbackType,
+  HiGHSError,
+  InfeasibleError,
+  UnboundedError,
+  TimeLimitError,
+  ModelError,
   modelStatusToString,
   varTypeToHighs,
   sensToHighs,
+  isOptimalStatus,
+  hasSolutionStatus,
 } from "./types.ts";
 
 export class Solver implements Disposable {
@@ -39,12 +49,16 @@ export class Solver implements Disposable {
   #numCols = 0;
   #numRows = 0;
 
-  constructor(module: HighsModule) {
+  constructor(module: HighsModule, options: SolverOptions = {}) {
     this.#module = module;
     this.#api = createCApi(module);
     this.#ptr = this.#api.create();
     if (!this.#ptr) {
       throw new Error("Failed to create HiGHS instance");
+    }
+    // Suppress HiGHS output by default unless verbose
+    if (!options.verbose) {
+      this.setOption("output_flag", false);
     }
     // Register for GC cleanup
     Solver.#registry.register(this, { ptr: this.#ptr, api: this.#api }, this);
@@ -109,10 +123,10 @@ export class Solver implements Disposable {
     return colIdx as VarRef;
   }
 
-  // Bulk add variables
+  // Bulk add variables with optional integrality
   addVars(options: BulkVarsOptions): VarRef {
     this.#checkDisposed();
-    const { lb, ub, costs } = options;
+    const { lb, ub, costs, types } = options;
     const n = lb.length;
 
     if (ub.length !== n) {
@@ -142,6 +156,16 @@ export class Solver implements Disposable {
           this.#api.changeColCost(this.#ptr, startIdx + i, c);
         }
       }
+    }
+
+    // Set integrality if provided - use bulk API
+    if (types) {
+      if (types.length !== n) {
+        throw new Error("types array must have same length as lb/ub");
+      }
+      const typesPtr = allocInt32Array(this.#module, types);
+      this.#api.changeColsIntegralityByRange(this.#ptr, startIdx, startIdx + n - 1, typesPtr);
+      this.#freePtr(typesPtr);
     }
 
     return startIdx as VarRef;
@@ -229,6 +253,72 @@ export class Solver implements Disposable {
     return startIdx as ConRef;
   }
 
+  // Delete rows by index array
+  deleteRows(indices: number[] | Int32Array): void {
+    this.#checkDisposed();
+    const arr = indices instanceof Int32Array ? indices : new Int32Array(indices);
+    const ptr = allocInt32Array(this.#module, arr);
+    const status = this.#api.deleteRowsBySet(this.#ptr, arr.length, ptr);
+    this.#freePtr(ptr);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to delete rows: status ${status}`);
+    }
+    // Update row count
+    this.#numRows = this.#api.getNumRow(this.#ptr);
+  }
+
+  // Delete cols by index array
+  deleteCols(indices: number[] | Int32Array): void {
+    this.#checkDisposed();
+    const arr = indices instanceof Int32Array ? indices : new Int32Array(indices);
+    const ptr = allocInt32Array(this.#module, arr);
+    const status = this.#api.deleteColsBySet(this.#ptr, arr.length, ptr);
+    this.#freePtr(ptr);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to delete cols: status ${status}`);
+    }
+    // Update col count
+    this.#numCols = this.#api.getNumCol(this.#ptr);
+  }
+
+  // Model modification methods
+  changeColCost(v: VarRef, cost: number): void {
+    this.#checkDisposed();
+    const status = this.#api.changeColCost(this.#ptr, v, cost);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to change col cost: status ${status}`);
+    }
+  }
+
+  changeColBounds(v: VarRef, bounds: { lb?: number; ub?: number }): void {
+    this.#checkDisposed();
+    // Need to get current bounds if not both provided
+    const lb = bounds.lb ?? 0;
+    const ub = bounds.ub ?? Infinity;
+    const status = this.#api.changeColBounds(this.#ptr, v, lb, ub);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to change col bounds: status ${status}`);
+    }
+  }
+
+  changeRowBounds(c: ConRef, bounds: { lb?: number; ub?: number }): void {
+    this.#checkDisposed();
+    const lb = bounds.lb ?? -Infinity;
+    const ub = bounds.ub ?? Infinity;
+    const status = this.#api.changeRowBounds(this.#ptr, c, lb, ub);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to change row bounds: status ${status}`);
+    }
+  }
+
+  changeCoeff(c: ConRef, v: VarRef, value: number): void {
+    this.#checkDisposed();
+    const status = this.#api.changeCoeff(this.#ptr, c, v, value);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to change coefficient: status ${status}`);
+    }
+  }
+
   // Set objective sense
   setObjectiveSense(sense: ObjectiveSense) {
     this.#checkDisposed();
@@ -263,19 +353,60 @@ export class Solver implements Disposable {
     }
   }
 
-  // Solve the model
-  solve(): SolveResult {
-    this.#checkDisposed();
+  // Apply solve options temporarily
+  #applySolveOptions(opts: SolveOptions) {
+    if (opts.timeLimit !== undefined) {
+      this.setOption("time_limit", opts.timeLimit);
+    }
+    if (opts.presolve !== undefined) {
+      this.setOption("presolve", opts.presolve);
+    }
+    if (opts.mipRelGap !== undefined) {
+      this.setOption("mip_rel_gap", opts.mipRelGap);
+    }
+    if (opts.mipMaxNodes !== undefined) {
+      this.setOption("mip_max_nodes", opts.mipMaxNodes);
+    }
+    if (opts.threads !== undefined) {
+      this.setOption("threads", opts.threads);
+    }
+  }
 
+  // Internal solve that returns result or throws
+  #solveInternal(): SolveResult {
     const runStatus = this.#api.run(this.#ptr);
     if (runStatus === HighsStatus.Error) {
       throw new Error("Solver error during run");
     }
 
     const modelStatus = this.#api.getModelStatus(this.#ptr);
-    const objectiveValue = this.#api.getObjectiveValue(this.#ptr);
+    const statusStr = modelStatusToString(modelStatus);
     const numCols = this.#api.getNumCol(this.#ptr);
     const numRows = this.#api.getNumRow(this.#ptr);
+
+    // Check if we have a solution
+    if (!hasSolutionStatus(statusStr)) {
+      // No solution - throw appropriate error
+      switch (statusStr) {
+        case "Infeasible":
+          throw new InfeasibleError();
+        case "UnboundedOrInfeasible":
+          throw new InfeasibleError("Model is unbounded or infeasible");
+        case "Unbounded":
+          throw new UnboundedError();
+        case "TimeLimit":
+          throw new TimeLimitError();
+        case "IterationLimit":
+          throw new HiGHSError("IterationLimit", "Iteration limit reached without finding a solution");
+        case "ModelError":
+        case "LoadError":
+          throw new ModelError();
+        default:
+          throw new HiGHSError(statusStr, `Solve failed with status: ${statusStr}`);
+      }
+    }
+
+    const objectiveValue = this.#api.getObjectiveValue(this.#ptr);
 
     // Allocate solution arrays
     const colValuePtr = this.#module._malloc(numCols * 8);
@@ -301,7 +432,8 @@ export class Solver implements Disposable {
     const ptr = this.#ptr;
 
     return {
-      status: modelStatusToString(modelStatus),
+      status: statusStr,
+      isOptimal: isOptimalStatus(statusStr),
       objectiveValue,
 
       value(v: VarRef): number {
@@ -326,6 +458,17 @@ export class Solver implements Disposable {
 
       dualValues(): Float64Array {
         return rowDuals.slice();
+      },
+
+      getBasis(): Basis {
+        const colStatusPtr = module._malloc(numCols * 4);
+        const rowStatusPtr = module._malloc(numRows * 4);
+        api.getBasis(ptr, colStatusPtr, rowStatusPtr);
+        const colStatus = readInt32Array(module, colStatusPtr, numCols);
+        const rowStatus = readInt32Array(module, rowStatusPtr, numRows);
+        module._free(colStatusPtr);
+        module._free(rowStatusPtr);
+        return { colStatus, rowStatus };
       },
 
       info(key: string): number | string {
@@ -357,9 +500,17 @@ export class Solver implements Disposable {
     };
   }
 
-  // Streaming solve with MIP progress (for MIP models)
-  solveStreaming(): StreamingSolve {
+  // Solve the model
+  solve(opts: SolveOptions = {}): SolveResult {
     this.#checkDisposed();
+    this.#applySolveOptions(opts);
+    return this.#solveInternal();
+  }
+
+  // Streaming solve with MIP progress (for MIP models)
+  solveStreaming(opts: SolveOptions = {}): StreamingSolve {
+    this.#checkDisposed();
+    this.#applySolveOptions(opts);
 
     const updates: ProgressUpdate[] = [];
     let cancelled = false;
@@ -380,17 +531,9 @@ export class Solver implements Disposable {
       if (callbackType !== HighsCallbackType.MipLogging) return;
 
       // Read fields from HighsCallbackDataOut struct
-      // The struct has fields at specific offsets (check HiGHS source for exact layout)
-      // running_time: double at offset 0
-      // objective_function_value: double
-      // mip_node_count: int64
-      // mip_primal_bound: double
-      // mip_dual_bound: double
-      // mip_gap: double
-
       const runningTime = this.#module.getValue(dataOut, "double");
-      const objective = this.#module.getValue(dataOut + 8, "double");
-      const nodeCount = this.#module.getValue(dataOut + 16, "i32"); // Simplified: read as i32
+      const _objective = this.#module.getValue(dataOut + 8, "double");
+      const nodeCount = this.#module.getValue(dataOut + 16, "i32");
       const primalBound = this.#module.getValue(dataOut + 24, "double");
       const dualBound = this.#module.getValue(dataOut + 32, "double");
       const gap = this.#module.getValue(dataOut + 40, "double");
@@ -414,7 +557,6 @@ export class Solver implements Disposable {
     };
 
     // Register callback with emscripten
-    // Signature: void(int, char*, void*, void*, void*) -> "vipppp"
     const callbackPtr = this.#module.addFunction(callbackFn, "viiiii");
 
     // Set and start the callback
@@ -464,8 +606,7 @@ export class Solver implements Disposable {
     // Run solve in microtask to allow progress iteration to start
     const solution = Promise.resolve().then(() => {
       try {
-        const result = this.solve();
-        return result;
+        return this.#solveInternal();
       } finally {
         solveComplete = true;
 
@@ -484,16 +625,38 @@ export class Solver implements Disposable {
     return { solution, progress };
   }
 
+  // Set basis for warm starting
+  setBasis(basis: Basis): void {
+    this.#checkDisposed();
+    const colStatusPtr = allocInt32Array(this.#module, basis.colStatus);
+    const rowStatusPtr = allocInt32Array(this.#module, basis.rowStatus);
+    const status = this.#api.setBasis(this.#ptr, colStatusPtr, rowStatusPtr);
+    this.#freePtr(colStatusPtr);
+    this.#freePtr(rowStatusPtr);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to set basis: status ${status}`);
+    }
+  }
+
   // Clear the model (keep settings)
-  clearModel() {
+  clear() {
     this.#checkDisposed();
     this.#api.clearModel(this.#ptr);
     this.#numCols = 0;
     this.#numRows = 0;
   }
 
-  // Solve from LP/MPS string (backward-compat with highs-js)
-  solveModel(modelString: string, format: "lp" | "mps" = "lp"): SolveResult {
+  // Reset everything including options
+  reset() {
+    this.#checkDisposed();
+    this.#api.clearSolver(this.#ptr);
+    this.#api.clearModel(this.#ptr);
+    this.#numCols = 0;
+    this.#numRows = 0;
+  }
+
+  // Load model from LP/MPS string without solving
+  loadModel(modelString: string, format: "lp" | "mps" = "lp"): void {
     this.#checkDisposed();
 
     const filename = `/model.${format}`;
@@ -514,13 +677,17 @@ export class Solver implements Disposable {
     try { FS.unlink(filename); } catch {}
 
     if (readStatus !== HighsStatus.Ok) {
-      throw new Error(`Failed to read model: status ${readStatus}`);
+      throw new ModelError(`Failed to read model: status ${readStatus}`);
     }
 
     // Update col/row counts from loaded model
     this.#numCols = this.#api.getNumCol(this.#ptr);
     this.#numRows = this.#api.getNumRow(this.#ptr);
+  }
 
+  // Solve from LP/MPS string (backward-compat with highs-js)
+  solveModel(modelString: string, format: "lp" | "mps" = "lp"): SolveResult {
+    this.loadModel(modelString, format);
     return this.solve();
   }
 
@@ -537,6 +704,15 @@ export class Solver implements Disposable {
 
   // Get number of rows
   get numRows(): number {
+    return this.#numRows;
+  }
+
+  // Alias for spec compatibility
+  getNumCols(): number {
+    return this.#numCols;
+  }
+
+  getNumRows(): number {
     return this.#numRows;
   }
 }

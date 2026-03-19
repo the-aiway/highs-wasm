@@ -52,6 +52,8 @@ export interface BulkVarsOptions {
   lb: Float64Array;
   ub: Float64Array;
   costs?: Float64Array;
+  // Optional integrality: 0=continuous, 1=integer, 2=semi-continuous, 3=semi-integer
+  types?: Int32Array;
 }
 
 export interface BulkConstraintsOptions {
@@ -62,8 +64,22 @@ export interface BulkConstraintsOptions {
   values: Float64Array;
 }
 
+export interface SolveOptions {
+  timeLimit?: number;
+  presolve?: "on" | "off" | "choose";
+  mipRelGap?: number;
+  mipMaxNodes?: number;
+  threads?: number;
+}
+
+export interface Basis {
+  colStatus: Int32Array;
+  rowStatus: Int32Array;
+}
+
 export interface SolveResult {
   status: SolveStatus;
+  isOptimal: boolean;
   objectiveValue: number;
 
   // Per-variable access
@@ -77,6 +93,9 @@ export interface SolveResult {
   // Bulk extraction
   primalValues(): Float64Array;
   dualValues(): Float64Array;
+
+  // Basis for warm starting
+  getBasis(): Basis;
 
   // Solve info
   info(key: string): number | string;
@@ -103,6 +122,54 @@ export interface StreamingSolve {
 
 export interface SolverOptions {
   variant?: "st" | "mt";
+  verbose?: boolean; // Enable HiGHS output (default: false)
+}
+
+// Error classes
+export class HiGHSError extends Error {
+  status: SolveStatus;
+
+  constructor(status: SolveStatus, message?: string) {
+    super(message ?? `HiGHS error: ${status}`);
+    this.name = "HiGHSError";
+    this.status = status;
+  }
+}
+
+export class InfeasibleError extends HiGHSError {
+  override status = "Infeasible" as const;
+
+  constructor(message = "Model is infeasible") {
+    super("Infeasible", message);
+    this.name = "InfeasibleError";
+  }
+}
+
+export class UnboundedError extends HiGHSError {
+  override status = "Unbounded" as const;
+
+  constructor(message = "Model is unbounded") {
+    super("Unbounded", message);
+    this.name = "UnboundedError";
+  }
+}
+
+export class TimeLimitError extends HiGHSError {
+  override status = "TimeLimit" as const;
+
+  constructor(message = "Time limit reached without finding a solution") {
+    super("TimeLimit", message);
+    this.name = "TimeLimitError";
+  }
+}
+
+export class ModelError extends HiGHSError {
+  override status = "ModelError" as const;
+
+  constructor(message = "Model error") {
+    super("ModelError", message);
+    this.name = "ModelError";
+  }
 }
 
 // HiGHS constants
@@ -165,6 +232,34 @@ export const HighsCallbackType = {
   MipLogging: 5,
   MipInterrupt: 6,
 } as const;
+
+export const HighsBasisStatus = {
+  Lower: 0,
+  Basic: 1,
+  Upper: 2,
+  Zero: 3,
+  NonBasic: 4,
+  Super: 5,
+} as const;
+
+// Status that indicates an optimal or target-met solution
+const OPTIMAL_STATUSES: SolveStatus[] = ["Optimal", "ObjectiveBound", "ObjectiveTarget"];
+
+// Status that indicates a solution exists (possibly suboptimal due to limits)
+const HAS_SOLUTION_STATUSES: SolveStatus[] = [
+  ...OPTIMAL_STATUSES,
+  "TimeLimit",
+  "IterationLimit",
+  "SolutionLimit",
+];
+
+export function isOptimalStatus(status: SolveStatus): boolean {
+  return OPTIMAL_STATUSES.includes(status);
+}
+
+export function hasSolutionStatus(status: SolveStatus): boolean {
+  return HAS_SOLUTION_STATUSES.includes(status);
+}
 
 export function modelStatusToString(status: number): SolveStatus {
   const map: Record<number, SolveStatus> = {

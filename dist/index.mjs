@@ -15,6 +15,7 @@ function createCApi(module) {
     run: cwrap("Highs_run", "number", ["number"]),
     clear: cwrap("Highs_clear", "number", ["number"]),
     clearModel: cwrap("Highs_clearModel", "number", ["number"]),
+    clearSolver: cwrap("Highs_clearSolver", "number", ["number"]),
     readModel: cwrap("Highs_readModel", "number", ["number", "number"]),
     writeModel: cwrap("Highs_writeModel", "number", ["number", "number"]),
     passLp: cwrap("Highs_passLp", "number", [
@@ -92,6 +93,8 @@ function createCApi(module) {
       "number",
       "number"
     ]),
+    deleteRowsBySet: cwrap("Highs_deleteRowsBySet", "number", ["number", "number", "number"]),
+    deleteColsBySet: cwrap("Highs_deleteColsBySet", "number", ["number", "number", "number"]),
     changeColCost: cwrap("Highs_changeColCost", "number", ["number", "number", "number"]),
     changeColBounds: cwrap("Highs_changeColBounds", "number", ["number", "number", "number", "number"]),
     changeRowBounds: cwrap("Highs_changeRowBounds", "number", ["number", "number", "number", "number"]),
@@ -99,6 +102,7 @@ function createCApi(module) {
     changeObjectiveSense: cwrap("Highs_changeObjectiveSense", "number", ["number", "number"]),
     changeObjectiveOffset: cwrap("Highs_changeObjectiveOffset", "number", ["number", "number"]),
     changeColIntegrality: cwrap("Highs_changeColIntegrality", "number", ["number", "number", "number"]),
+    changeColsIntegralityByRange: cwrap("Highs_changeColsIntegralityByRange", "number", ["number", "number", "number", "number"]),
     getNumCol: cwrap("Highs_getNumCol", "number", ["number"]),
     getNumRow: cwrap("Highs_getNumRow", "number", ["number"]),
     getNumNz: cwrap("Highs_getNumNz", "number", ["number"]),
@@ -111,6 +115,7 @@ function createCApi(module) {
       "number"
     ]),
     getBasis: cwrap("Highs_getBasis", "number", ["number", "number", "number"]),
+    setBasis: cwrap("Highs_setBasis", "number", ["number", "number", "number"]),
     getModelStatus: cwrap("Highs_getModelStatus", "number", ["number"]),
     getIntInfoValue: cwrap("Highs_getIntInfoValue", "number", ["number", "number", "number"]),
     getDoubleInfoValue: cwrap("Highs_getDoubleInfoValue", "number", ["number", "number", "number"]),
@@ -152,8 +157,51 @@ function allocInt32Array(module, arr) {
 function readFloat64Array(module, ptr, length) {
   return module.HEAPF64.slice(ptr / 8, ptr / 8 + length);
 }
+function readInt32Array(module, ptr, length) {
+  return module.HEAP32.slice(ptr / 4, ptr / 4 + length);
+}
 
 // src/types.ts
+class HiGHSError extends Error {
+  status;
+  constructor(status, message) {
+    super(message ?? `HiGHS error: ${status}`);
+    this.name = "HiGHSError";
+    this.status = status;
+  }
+}
+
+class InfeasibleError extends HiGHSError {
+  status = "Infeasible";
+  constructor(message = "Model is infeasible") {
+    super("Infeasible", message);
+    this.name = "InfeasibleError";
+  }
+}
+
+class UnboundedError extends HiGHSError {
+  status = "Unbounded";
+  constructor(message = "Model is unbounded") {
+    super("Unbounded", message);
+    this.name = "UnboundedError";
+  }
+}
+
+class TimeLimitError extends HiGHSError {
+  status = "TimeLimit";
+  constructor(message = "Time limit reached without finding a solution") {
+    super("TimeLimit", message);
+    this.name = "TimeLimitError";
+  }
+}
+
+class ModelError extends HiGHSError {
+  status = "ModelError";
+  constructor(message = "Model error") {
+    super("ModelError", message);
+    this.name = "ModelError";
+  }
+}
 var HighsStatus = {
   Error: -1,
   Ok: 0,
@@ -183,6 +231,19 @@ var HighsCallbackType = {
   MipLogging: 5,
   MipInterrupt: 6
 };
+var OPTIMAL_STATUSES = ["Optimal", "ObjectiveBound", "ObjectiveTarget"];
+var HAS_SOLUTION_STATUSES = [
+  ...OPTIMAL_STATUSES,
+  "TimeLimit",
+  "IterationLimit",
+  "SolutionLimit"
+];
+function isOptimalStatus(status) {
+  return OPTIMAL_STATUSES.includes(status);
+}
+function hasSolutionStatus(status) {
+  return HAS_SOLUTION_STATUSES.includes(status);
+}
 function modelStatusToString(status) {
   const map = {
     0: "NotSet",
@@ -230,12 +291,15 @@ class Solver {
   #disposed = false;
   #numCols = 0;
   #numRows = 0;
-  constructor(module) {
+  constructor(module, options = {}) {
     this.#module = module;
     this.#api = createCApi(module);
     this.#ptr = this.#api.create();
     if (!this.#ptr) {
       throw new Error("Failed to create HiGHS instance");
+    }
+    if (!options.verbose) {
+      this.setOption("output_flag", false);
     }
     Solver.#registry.register(this, { ptr: this.#ptr, api: this.#api }, this);
   }
@@ -284,7 +348,7 @@ class Solver {
   }
   addVars(options) {
     this.#checkDisposed();
-    const { lb, ub, costs } = options;
+    const { lb, ub, costs, types } = options;
     const n = lb.length;
     if (ub.length !== n) {
       throw new Error("lb and ub must have same length");
@@ -306,6 +370,14 @@ class Solver {
           this.#api.changeColCost(this.#ptr, startIdx + i, c);
         }
       }
+    }
+    if (types) {
+      if (types.length !== n) {
+        throw new Error("types array must have same length as lb/ub");
+      }
+      const typesPtr = allocInt32Array(this.#module, types);
+      this.#api.changeColsIntegralityByRange(this.#ptr, startIdx, startIdx + n - 1, typesPtr);
+      this.#freePtr(typesPtr);
     }
     return startIdx;
   }
@@ -363,6 +435,60 @@ class Solver {
     this.#numRows += numRows;
     return startIdx;
   }
+  deleteRows(indices) {
+    this.#checkDisposed();
+    const arr = indices instanceof Int32Array ? indices : new Int32Array(indices);
+    const ptr = allocInt32Array(this.#module, arr);
+    const status = this.#api.deleteRowsBySet(this.#ptr, arr.length, ptr);
+    this.#freePtr(ptr);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to delete rows: status ${status}`);
+    }
+    this.#numRows = this.#api.getNumRow(this.#ptr);
+  }
+  deleteCols(indices) {
+    this.#checkDisposed();
+    const arr = indices instanceof Int32Array ? indices : new Int32Array(indices);
+    const ptr = allocInt32Array(this.#module, arr);
+    const status = this.#api.deleteColsBySet(this.#ptr, arr.length, ptr);
+    this.#freePtr(ptr);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to delete cols: status ${status}`);
+    }
+    this.#numCols = this.#api.getNumCol(this.#ptr);
+  }
+  changeColCost(v, cost) {
+    this.#checkDisposed();
+    const status = this.#api.changeColCost(this.#ptr, v, cost);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to change col cost: status ${status}`);
+    }
+  }
+  changeColBounds(v, bounds) {
+    this.#checkDisposed();
+    const lb = bounds.lb ?? 0;
+    const ub = bounds.ub ?? Infinity;
+    const status = this.#api.changeColBounds(this.#ptr, v, lb, ub);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to change col bounds: status ${status}`);
+    }
+  }
+  changeRowBounds(c, bounds) {
+    this.#checkDisposed();
+    const lb = bounds.lb ?? -Infinity;
+    const ub = bounds.ub ?? Infinity;
+    const status = this.#api.changeRowBounds(this.#ptr, c, lb, ub);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to change row bounds: status ${status}`);
+    }
+  }
+  changeCoeff(c, v, value) {
+    this.#checkDisposed();
+    const status = this.#api.changeCoeff(this.#ptr, c, v, value);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to change coefficient: status ${status}`);
+    }
+  }
   setObjectiveSense(sense) {
     this.#checkDisposed();
     const status = this.#api.changeObjectiveSense(this.#ptr, sensToHighs(sense));
@@ -390,16 +516,52 @@ class Solver {
       throw new Error(`Failed to set option "${name}": status ${status}`);
     }
   }
-  solve() {
-    this.#checkDisposed();
+  #applySolveOptions(opts) {
+    if (opts.timeLimit !== undefined) {
+      this.setOption("time_limit", opts.timeLimit);
+    }
+    if (opts.presolve !== undefined) {
+      this.setOption("presolve", opts.presolve);
+    }
+    if (opts.mipRelGap !== undefined) {
+      this.setOption("mip_rel_gap", opts.mipRelGap);
+    }
+    if (opts.mipMaxNodes !== undefined) {
+      this.setOption("mip_max_nodes", opts.mipMaxNodes);
+    }
+    if (opts.threads !== undefined) {
+      this.setOption("threads", opts.threads);
+    }
+  }
+  #solveInternal() {
     const runStatus = this.#api.run(this.#ptr);
     if (runStatus === HighsStatus.Error) {
       throw new Error("Solver error during run");
     }
     const modelStatus = this.#api.getModelStatus(this.#ptr);
-    const objectiveValue = this.#api.getObjectiveValue(this.#ptr);
+    const statusStr = modelStatusToString(modelStatus);
     const numCols = this.#api.getNumCol(this.#ptr);
     const numRows = this.#api.getNumRow(this.#ptr);
+    if (!hasSolutionStatus(statusStr)) {
+      switch (statusStr) {
+        case "Infeasible":
+          throw new InfeasibleError;
+        case "UnboundedOrInfeasible":
+          throw new InfeasibleError("Model is unbounded or infeasible");
+        case "Unbounded":
+          throw new UnboundedError;
+        case "TimeLimit":
+          throw new TimeLimitError;
+        case "IterationLimit":
+          throw new HiGHSError("IterationLimit", "Iteration limit reached without finding a solution");
+        case "ModelError":
+        case "LoadError":
+          throw new ModelError;
+        default:
+          throw new HiGHSError(statusStr, `Solve failed with status: ${statusStr}`);
+      }
+    }
+    const objectiveValue = this.#api.getObjectiveValue(this.#ptr);
     const colValuePtr = this.#module._malloc(numCols * 8);
     const colDualPtr = this.#module._malloc(numCols * 8);
     const rowValuePtr = this.#module._malloc(numRows * 8);
@@ -417,7 +579,8 @@ class Solver {
     const api = this.#api;
     const ptr = this.#ptr;
     return {
-      status: modelStatusToString(modelStatus),
+      status: statusStr,
+      isOptimal: isOptimalStatus(statusStr),
       objectiveValue,
       value(v) {
         return colValues[v] ?? NaN;
@@ -436,6 +599,16 @@ class Solver {
       },
       dualValues() {
         return rowDuals.slice();
+      },
+      getBasis() {
+        const colStatusPtr = module._malloc(numCols * 4);
+        const rowStatusPtr = module._malloc(numRows * 4);
+        api.getBasis(ptr, colStatusPtr, rowStatusPtr);
+        const colStatus = readInt32Array(module, colStatusPtr, numCols);
+        const rowStatus = readInt32Array(module, rowStatusPtr, numRows);
+        module._free(colStatusPtr);
+        module._free(rowStatusPtr);
+        return { colStatus, rowStatus };
       },
       info(key) {
         const keyPtr = allocString(module, key);
@@ -461,8 +634,14 @@ class Solver {
       }
     };
   }
-  solveStreaming() {
+  solve(opts = {}) {
     this.#checkDisposed();
+    this.#applySolveOptions(opts);
+    return this.#solveInternal();
+  }
+  solveStreaming(opts = {}) {
+    this.#checkDisposed();
+    this.#applySolveOptions(opts);
     const updates = [];
     let cancelled = false;
     let resolveWait = null;
@@ -473,7 +652,7 @@ class Solver {
       if (callbackType !== HighsCallbackType.MipLogging)
         return;
       const runningTime = this.#module.getValue(dataOut, "double");
-      const objective = this.#module.getValue(dataOut + 8, "double");
+      const _objective = this.#module.getValue(dataOut + 8, "double");
       const nodeCount = this.#module.getValue(dataOut + 16, "i32");
       const primalBound = this.#module.getValue(dataOut + 24, "double");
       const dualBound = this.#module.getValue(dataOut + 32, "double");
@@ -526,8 +705,7 @@ class Solver {
     };
     const solution = Promise.resolve().then(() => {
       try {
-        const result = this.solve();
-        return result;
+        return this.#solveInternal();
       } finally {
         solveComplete = true;
         this.#api.stopCallback(this.#ptr, HighsCallbackType.MipLogging);
@@ -540,13 +718,31 @@ class Solver {
     });
     return { solution, progress };
   }
-  clearModel() {
+  setBasis(basis) {
+    this.#checkDisposed();
+    const colStatusPtr = allocInt32Array(this.#module, basis.colStatus);
+    const rowStatusPtr = allocInt32Array(this.#module, basis.rowStatus);
+    const status = this.#api.setBasis(this.#ptr, colStatusPtr, rowStatusPtr);
+    this.#freePtr(colStatusPtr);
+    this.#freePtr(rowStatusPtr);
+    if (status !== HighsStatus.Ok) {
+      throw new Error(`Failed to set basis: status ${status}`);
+    }
+  }
+  clear() {
     this.#checkDisposed();
     this.#api.clearModel(this.#ptr);
     this.#numCols = 0;
     this.#numRows = 0;
   }
-  solveModel(modelString, format = "lp") {
+  reset() {
+    this.#checkDisposed();
+    this.#api.clearSolver(this.#ptr);
+    this.#api.clearModel(this.#ptr);
+    this.#numCols = 0;
+    this.#numRows = 0;
+  }
+  loadModel(modelString, format = "lp") {
     this.#checkDisposed();
     const filename = `/model.${format}`;
     const FS = this.#module.FS;
@@ -561,10 +757,13 @@ class Solver {
       FS.unlink(filename);
     } catch {}
     if (readStatus !== HighsStatus.Ok) {
-      throw new Error(`Failed to read model: status ${readStatus}`);
+      throw new ModelError(`Failed to read model: status ${readStatus}`);
     }
     this.#numCols = this.#api.getNumCol(this.#ptr);
     this.#numRows = this.#api.getNumRow(this.#ptr);
+  }
+  solveModel(modelString, format = "lp") {
+    this.loadModel(modelString, format);
     return this.solve();
   }
   version() {
@@ -577,8 +776,64 @@ class Solver {
   get numRows() {
     return this.#numRows;
   }
+  getNumCols() {
+    return this.#numCols;
+  }
+  getNumRows() {
+    return this.#numRows;
+  }
 }
 // src/client.ts
+function reconstructResult(result) {
+  const primalValues = new Float64Array(result.primalValues);
+  const dualValues = new Float64Array(result.dualValues);
+  return {
+    status: result.status,
+    isOptimal: result.isOptimal,
+    objectiveValue: result.objectiveValue,
+    value(v) {
+      return primalValues[v] ?? NaN;
+    },
+    reducedCost(_v) {
+      return NaN;
+    },
+    dual(c) {
+      return dualValues[c] ?? NaN;
+    },
+    slack(_c) {
+      return NaN;
+    },
+    primalValues() {
+      return primalValues.slice();
+    },
+    dualValues() {
+      return dualValues.slice();
+    },
+    getBasis() {
+      return result.basis;
+    },
+    info(_key) {
+      return NaN;
+    }
+  };
+}
+function reconstructError(errorClass, message) {
+  switch (errorClass) {
+    case "InfeasibleError":
+      return new InfeasibleError(message);
+    case "UnboundedError":
+      return new UnboundedError(message);
+    case "TimeLimitError":
+      return new TimeLimitError(message);
+    case "ModelError":
+      return new ModelError(message);
+    case "HiGHSError":
+      return new HiGHSError("Unknown", message);
+    default:
+      return new Error(message);
+  }
+}
+
 class SolverClient {
   #worker;
   #messageId = 0;
@@ -608,14 +863,14 @@ class SolverClient {
         }
         return;
       }
-      const { id, ok, result, error } = data;
+      const { id, ok, result, error, errorClass } = data;
       const handler = this.#pending.get(id);
       if (handler) {
         this.#pending.delete(id);
         if (ok) {
           handler.resolve(result);
         } else {
-          handler.reject(new Error(error));
+          handler.reject(reconstructError(errorClass, error));
         }
       }
     };
@@ -629,7 +884,7 @@ class SolverClient {
       }
       this.#streamingHandlers.clear();
     };
-    this.#initPromise = this.#send("init", { variant });
+    this.#initPromise = this.#send("init", { variant, verbose: options.verbose });
   }
   async#send(cmd, params = {}) {
     if (this.#disposed) {
@@ -654,7 +909,8 @@ class SolverClient {
       options: {
         lb: options.lb.buffer,
         ub: options.ub.buffer,
-        costs: options.costs?.buffer
+        costs: options.costs?.buffer,
+        types: options.types?.buffer
       }
     };
     return this.#send("addVars", msg);
@@ -684,46 +940,69 @@ class SolverClient {
     await this.#initPromise;
     await this.#send("setOption", { name, value });
   }
-  async solve() {
+  async solve(opts = {}) {
     await this.#initPromise;
-    const result = await this.#send("solve");
-    const primalValues = new Float64Array(result.primalValues);
-    const dualValues = new Float64Array(result.dualValues);
-    return {
-      status: result.status,
-      objectiveValue: result.objectiveValue,
-      value(v) {
-        return primalValues[v] ?? NaN;
-      },
-      reducedCost(_v) {
-        return NaN;
-      },
-      dual(c) {
-        return dualValues[c] ?? NaN;
-      },
-      slack(_c) {
-        return NaN;
-      },
-      primalValues() {
-        return primalValues.slice();
-      },
-      dualValues() {
-        return dualValues.slice();
-      },
-      info(_key) {
-        return NaN;
-      }
-    };
+    const result = await this.#send("solve", { options: opts });
+    return reconstructResult(result);
   }
-  async clearModel() {
+  async clear() {
     await this.#initPromise;
-    await this.#send("clearModel");
+    await this.#send("clear");
+  }
+  async reset() {
+    await this.#initPromise;
+    await this.#send("reset");
+  }
+  async loadModel(modelString, format = "lp") {
+    await this.#initPromise;
+    await this.#send("loadModel", { modelString, format });
+  }
+  async solveModel(modelString, format = "lp") {
+    await this.#initPromise;
+    const result = await this.#send("solveModel", { modelString, format });
+    return reconstructResult(result);
+  }
+  async setBasis(basis) {
+    await this.#initPromise;
+    await this.#send("setBasis", { basis });
+  }
+  async changeColCost(v, cost) {
+    await this.#initPromise;
+    await this.#send("changeColCost", { v, cost });
+  }
+  async changeColBounds(v, bounds) {
+    await this.#initPromise;
+    await this.#send("changeColBounds", { v, bounds });
+  }
+  async changeRowBounds(c, bounds) {
+    await this.#initPromise;
+    await this.#send("changeRowBounds", { c, bounds });
+  }
+  async changeCoeff(c, v, value) {
+    await this.#initPromise;
+    await this.#send("changeCoeff", { c, v, value });
+  }
+  async deleteRows(indices) {
+    await this.#initPromise;
+    await this.#send("deleteRows", { indices });
+  }
+  async deleteCols(indices) {
+    await this.#initPromise;
+    await this.#send("deleteCols", { indices });
+  }
+  async getNumCols() {
+    await this.#initPromise;
+    return this.#send("getNumCols");
+  }
+  async getNumRows() {
+    await this.#initPromise;
+    return this.#send("getNumRows");
   }
   async version() {
     await this.#initPromise;
     return this.#send("version");
   }
-  solveStreaming() {
+  solveStreaming(opts = {}) {
     const id = this.#messageId++;
     const updates = [];
     let cancelled = false;
@@ -763,7 +1042,7 @@ class SolverClient {
       }
     });
     this.#initPromise.then(() => {
-      this.#worker.postMessage({ id, cmd: "solveStreaming" });
+      this.#worker.postMessage({ id, cmd: "solveStreaming", options: opts });
     });
     const progress = {
       cancel: () => {
@@ -797,33 +1076,7 @@ class SolverClient {
     };
     const solution = new Promise((resolve, reject) => {
       resolveComplete = (result) => {
-        const primalValues = new Float64Array(result.primalValues);
-        const dualValues = new Float64Array(result.dualValues);
-        resolve({
-          status: result.status,
-          objectiveValue: result.objectiveValue,
-          value(v) {
-            return primalValues[v] ?? NaN;
-          },
-          reducedCost(_v) {
-            return NaN;
-          },
-          dual(c) {
-            return dualValues[c] ?? NaN;
-          },
-          slack(_c) {
-            return NaN;
-          },
-          primalValues() {
-            return primalValues.slice();
-          },
-          dualValues() {
-            return dualValues.slice();
-          },
-          info(_key) {
-            return NaN;
-          }
-        });
+        resolve(reconstructResult(result));
       };
       rejectComplete = reject;
     });
@@ -915,13 +1168,18 @@ async function create(options = {}) {
   const variant = options.variant ?? (features.threads ? "mt" : "st");
   const mod = variant === "mt" ? await import("./highs.mt.mjs") : await import("./highs.st.mjs");
   const module = await mod.default();
-  return new Solver(module);
+  return new Solver(module, options);
 }
 export {
   detect,
   createCApi,
   create,
   SolverClient as WorkerSolver,
+  UnboundedError,
+  TimeLimitError,
   SolverClient,
-  Solver
+  Solver,
+  ModelError,
+  InfeasibleError,
+  HiGHSError
 };
