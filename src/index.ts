@@ -13,6 +13,7 @@ export type {
   BulkConstraintsOptions,
   SolveResult,
   ProgressUpdate,
+  ProgressController,
   StreamingSolve,
   SolverOptions,
 } from "./types.ts";

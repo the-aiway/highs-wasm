@@ -162,3 +162,36 @@ End
   expect(result.status).toBe("Optimal");
   expect(result.objectiveValue).toBeCloseTo(7);
 });
+
+test("solveStreaming returns solution", async () => {
+  await using solver = await create({ variant: "st" });
+  solver.setOption("output_flag", false);
+
+  // Create a small MIP
+  const x = solver.addVar({ lb: 0, ub: 10, cost: 1, type: "integer" });
+  const y = solver.addVar({ lb: 0, ub: 10, cost: 2, type: "integer" });
+
+  solver.addConstraint({
+    terms: [[x, 1], [y, 1]],
+    ub: 15,
+  });
+
+  solver.setObjectiveSense("maximize");
+
+  const { solution, progress } = solver.solveStreaming();
+
+  // Collect any progress updates (may be empty for small problems)
+  const updates = [];
+  for await (const update of progress) {
+    updates.push(update);
+  }
+
+  const result = await solution;
+
+  console.log("Streaming solve updates:", updates.length);
+  console.log("Streaming result:", result.status, result.objectiveValue);
+
+  expect(result.status).toBe("Optimal");
+  // x + y <= 15, maximize x + 2y => x=5, y=10, obj = 5 + 20 = 25
+  expect(result.objectiveValue).toBeCloseTo(25);
+});

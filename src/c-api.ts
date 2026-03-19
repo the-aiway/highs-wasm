@@ -26,6 +26,16 @@ export interface HighsModule {
   stringToUTF8(str: string, outPtr: number, maxBytesToWrite: number): void;
   UTF8ToString(ptr: number): string;
   lengthBytesUTF8(str: string): number;
+
+  // Callback support
+  addFunction(fn: (...args: any[]) => any, signature: string): number;
+  removeFunction(ptr: number): void;
+
+  // Filesystem
+  FS?: {
+    writeFile(path: string, data: string | ArrayBufferView): void;
+    unlink(path: string): void;
+  };
 }
 
 export interface HighsCApi {

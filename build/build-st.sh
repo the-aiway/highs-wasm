@@ -32,7 +32,8 @@ emcc "$BUILD_DIR/lib/libhighs.a" -o "$DIST_DIR/highs.st.mjs" \
   -sEXPORT_ES6=1 \
   -sSINGLE_FILE=1 \
   -sEXPORTED_FUNCTIONS=@"$SCRIPT_DIR/exported_functions.json" \
-  -sEXPORTED_RUNTIME_METHODS='["cwrap","getValue","setValue","stringToUTF8","UTF8ToString","lengthBytesUTF8","HEAP8","HEAPU8","HEAP16","HEAPU16","HEAP32","HEAPU32","HEAPF32","HEAPF64","FS"]' \
+  -sEXPORTED_RUNTIME_METHODS='["cwrap","getValue","setValue","stringToUTF8","UTF8ToString","lengthBytesUTF8","HEAP8","HEAPU8","HEAP16","HEAPU16","HEAP32","HEAPU32","HEAPF32","HEAPF64","FS","addFunction","removeFunction"]' \
+  -sALLOW_TABLE_GROWTH=1 \
   -sENVIRONMENT='web,worker' \
   -sNO_EXIT_RUNTIME=1 \
   -sFILESYSTEM=1

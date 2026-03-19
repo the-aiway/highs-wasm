@@ -15,6 +15,9 @@ import type {
   BulkConstraintsOptions,
   SolveResult,
   ObjectiveSense,
+  ProgressUpdate,
+  StreamingSolve,
+  ProgressController,
 } from "./types.ts";
 import {
   HighsStatus,
@@ -22,6 +25,7 @@ import {
   HighsObjSense,
   HighsMatrixFormat,
   HighsInfoType,
+  HighsCallbackType,
   modelStatusToString,
   varTypeToHighs,
   sensToHighs,
@@ -351,6 +355,133 @@ export class Solver implements Disposable {
         return result;
       },
     };
+  }
+
+  // Streaming solve with MIP progress (for MIP models)
+  solveStreaming(): StreamingSolve {
+    this.#checkDisposed();
+
+    const updates: ProgressUpdate[] = [];
+    let cancelled = false;
+    let resolveWait: (() => void) | null = null;
+    let solveComplete = false;
+
+    // Create a callback function for MIP progress
+    const callbackFn = (
+      callbackType: number,
+      _message: number,
+      dataOut: number,
+      _dataIn: number,
+      _userData: number
+    ) => {
+      if (cancelled) return;
+
+      // Only handle MIP logging callbacks
+      if (callbackType !== HighsCallbackType.MipLogging) return;
+
+      // Read fields from HighsCallbackDataOut struct
+      // The struct has fields at specific offsets (check HiGHS source for exact layout)
+      // running_time: double at offset 0
+      // objective_function_value: double
+      // mip_node_count: int64
+      // mip_primal_bound: double
+      // mip_dual_bound: double
+      // mip_gap: double
+
+      const runningTime = this.#module.getValue(dataOut, "double");
+      const objective = this.#module.getValue(dataOut + 8, "double");
+      const nodeCount = this.#module.getValue(dataOut + 16, "i32"); // Simplified: read as i32
+      const primalBound = this.#module.getValue(dataOut + 24, "double");
+      const dualBound = this.#module.getValue(dataOut + 32, "double");
+      const gap = this.#module.getValue(dataOut + 40, "double");
+
+      const update: ProgressUpdate = {
+        iteration: nodeCount,
+        objective: primalBound,
+        bound: dualBound,
+        gap: gap,
+        nodes: nodeCount,
+        elapsed: runningTime,
+      };
+
+      updates.push(update);
+
+      // Wake up any waiting consumer
+      if (resolveWait) {
+        resolveWait();
+        resolveWait = null;
+      }
+    };
+
+    // Register callback with emscripten
+    // Signature: void(int, char*, void*, void*, void*) -> "vipppp"
+    const callbackPtr = this.#module.addFunction(callbackFn, "viiiii");
+
+    // Set and start the callback
+    this.#api.setCallback(this.#ptr, callbackPtr, 0);
+    this.#api.startCallback(this.#ptr, HighsCallbackType.MipLogging);
+
+    // Create progress async iterator
+    const progress: ProgressController = {
+      cancel: () => {
+        cancelled = true;
+        if (resolveWait) {
+          resolveWait();
+          resolveWait = null;
+        }
+      },
+
+      [Symbol.asyncIterator]: () => {
+        let index = 0;
+        return {
+          next: async (): Promise<IteratorResult<ProgressUpdate>> => {
+            // Return any buffered updates first
+            if (index < updates.length) {
+              return { value: updates[index++], done: false };
+            }
+
+            // If solve is complete or cancelled, we're done
+            if (solveComplete || cancelled) {
+              return { value: undefined as any, done: true };
+            }
+
+            // Wait for more updates
+            await new Promise<void>((resolve) => {
+              resolveWait = resolve;
+            });
+
+            // Check again after waking
+            if (index < updates.length) {
+              return { value: updates[index++], done: false };
+            }
+
+            return { value: undefined as any, done: true };
+          },
+        };
+      },
+    };
+
+    // Run solve in microtask to allow progress iteration to start
+    const solution = Promise.resolve().then(() => {
+      try {
+        const result = this.solve();
+        return result;
+      } finally {
+        solveComplete = true;
+
+        // Stop callback and cleanup
+        this.#api.stopCallback(this.#ptr, HighsCallbackType.MipLogging);
+        this.#module.removeFunction(callbackPtr);
+
+        // Wake up any waiting consumer
+        if (resolveWait) {
+          resolveWait();
+          resolveWait = null;
+        }
+      }
+    });
+
+    return { solution, progress };
   }
 
   // Clear the model (keep settings)

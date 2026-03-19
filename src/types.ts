@@ -91,9 +91,14 @@ export interface ProgressUpdate {
   elapsed: number;
 }
 
+export interface ProgressController {
+  [Symbol.asyncIterator](): AsyncIterator<ProgressUpdate>;
+  cancel(): void;
+}
+
 export interface StreamingSolve {
   solution: Promise<SolveResult>;
-  progress: AsyncIterable<ProgressUpdate> & { cancel(): void };
+  progress: ProgressController;
 }
 
 export interface SolverOptions {
