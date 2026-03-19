@@ -41,6 +41,6 @@ test.describe("highs-wasm full e2e tests", () => {
 
     // All tests should pass
     expect(Number(passed)).toBe(Number(total));
-    expect(Number(total)).toBeGreaterThanOrEqual(8); // We have 8 tests
+    expect(Number(total)).toBeGreaterThanOrEqual(9); // We have 9 tests
   });
 });

@@ -1,5 +1,5 @@
 // E2E test that uses the actual highs-wasm API as a user would
-import { create, detect } from "../src/index.ts";
+import { create, detect, SolverClient } from "../src/index.ts";
 import type { VarRef } from "../src/types.ts";
 
 interface TestResult {
@@ -164,14 +164,14 @@ async function runAllTests() {
   });
 
   // Test 7: Model clearing
-  await runTest("clearModel() resets solver state", async () => {
+  await runTest("clear() resets solver state", async () => {
     await using solver = await create({ variant: "st" });
 
     solver.addVar({ lb: 0, ub: 1 });
     solver.addVar({ lb: 0, ub: 1 });
     if (solver.numCols !== 2) throw new Error("Expected 2 cols");
 
-    solver.clearModel();
+    solver.clear();
 
     if (solver.numCols !== 0) {
       throw new Error(`Expected 0 cols after clear, got ${solver.numCols}`);
@@ -182,7 +182,33 @@ async function runAllTests() {
     console.log("Model cleared successfully");
   });
 
-  // Test 8: Result methods
+  // Test 8: SolverClient (worker-based API)
+  await runTest("SolverClient works in Web Worker", async () => {
+    await using solver = new SolverClient({ variant: "st" });
+    await solver.ready();
+
+    const x = await solver.addVar({ lb: 0, ub: 10, cost: 1 });
+    const y = await solver.addVar({ lb: 0, ub: 10, cost: 2 });
+
+    await solver.addConstraint({
+      terms: [[x, 1], [y, 1]],
+      ub: 15,
+    });
+
+    await solver.setObjectiveSense("maximize");
+    const result = await solver.solve();
+
+    if (result.status !== "Optimal") {
+      throw new Error(`Expected Optimal, got ${result.status}`);
+    }
+    // x=5, y=10 -> obj = 5 + 20 = 25
+    if (Math.abs(result.objectiveValue - 25) > 0.001) {
+      throw new Error(`Expected objective 25, got ${result.objectiveValue}`);
+    }
+    console.log("SolverClient result:", result.status, "obj=", result.objectiveValue);
+  });
+
+  // Test 9: Result methods
   await runTest("SolveResult methods work correctly", async () => {
     await using solver = await create({ variant: "st" });
     solver.setOption("output_flag", false);

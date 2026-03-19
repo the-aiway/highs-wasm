@@ -100,21 +100,45 @@ function reconstructError(errorClass: string | undefined, message: string): Erro
   }
 }
 
+// Worker code is inlined as raw strings by the bundler
+// @ts-ignore - raw import
+import workerStCode from "../dist/worker.st.js" with { type: "text" };
+// @ts-ignore - raw import
+import workerMtCode from "../dist/worker.mt.js" with { type: "text" };
+
+const workerBlobUrls: Record<string, string> = {};
+
+function getWorkerBlobUrl(variant: "st" | "mt"): string {
+  if (!workerBlobUrls[variant]) {
+    const code = variant === "mt" ? workerMtCode : workerStCode;
+    const blob = new Blob([code], { type: "application/javascript" });
+    workerBlobUrls[variant] = URL.createObjectURL(blob);
+  }
+  return workerBlobUrls[variant];
+}
+
 export class SolverClient implements Disposable {
-  #worker: Worker;
+  #worker: Worker | null = null;
   #messageId = 0;
   #pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   #streamingHandlers = new Map<number, StreamingHandler>();
   #disposed = false;
   #initPromise: Promise<void>;
+  #options: SolverOptions;
 
   constructor(options: SolverOptions = {}) {
-    const variant = options.variant ?? (detectThreadSupport() ? "mt" : "st");
+    this.#options = options;
 
-    // Create worker from the bundled worker code
-    this.#worker = new Worker(new URL("./worker.ts", import.meta.url), {
-      type: "module",
-    });
+    // Initialize asynchronously
+    this.#initPromise = this.#init();
+  }
+
+  async #init(): Promise<void> {
+    const variant = this.#options.variant ?? (detectThreadSupport() ? "mt" : "st");
+
+    // Create worker from inlined Blob URL
+    const workerUrl = getWorkerBlobUrl(variant);
+    this.#worker = new Worker(workerUrl, { type: "module" });
 
     this.#worker.onmessage = (e) => {
       const data = e.data;
@@ -164,19 +188,22 @@ export class SolverClient implements Disposable {
       this.#streamingHandlers.clear();
     };
 
-    // Initialize the solver
-    this.#initPromise = this.#send("init", { variant, verbose: options.verbose });
+    // Initialize the solver in the worker (variant is baked into worker bundle)
+    await this.#send("init", { verbose: this.#options.verbose });
   }
 
   async #send(cmd: string, params: Record<string, unknown> = {}): Promise<any> {
     if (this.#disposed) {
       throw new Error("SolverClient has been disposed");
     }
+    if (!this.#worker) {
+      throw new Error("Worker not initialized");
+    }
 
     const id = this.#messageId++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
-      this.#worker.postMessage({ id, cmd, ...params });
+      this.#worker!.postMessage({ id, cmd, ...params });
     });
   }
 
@@ -352,7 +379,7 @@ export class SolverClient implements Disposable {
 
     // Send command after init
     this.#initPromise.then(() => {
-      this.#worker.postMessage({ id, cmd: "solveStreaming", options: opts });
+      this.#worker!.postMessage({ id, cmd: "solveStreaming", options: opts });
     });
 
     // Create progress async iterator
@@ -407,7 +434,7 @@ export class SolverClient implements Disposable {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#send("dispose").catch(() => {});
-    this.#worker.terminate();
+    this.#worker?.terminate();
   }
 }
 
