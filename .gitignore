@@ -9,6 +9,7 @@ out
 build/st/
 build/mt/
 build/debug/
+build/native/
 
 # test artifacts
 test-results/

@@ -32,13 +32,19 @@ export {
 import { Solver } from "./solver.ts";
 import type { SolverOptions } from "./types.ts";
 
+// Runtime detection
+const isBrowser = typeof window !== "undefined";
+const isNode = typeof process !== "undefined" && process.versions?.node;
+const isBun = typeof process !== "undefined" && process.versions?.bun;
+
 // Feature detection
 export function detect() {
   return {
     threads:
       typeof SharedArrayBuffer !== "undefined" &&
       typeof Atomics !== "undefined" &&
-      (globalThis as any).crossOriginIsolated === true,
+      // Browser requires crossOriginIsolated, Node/Bun don't
+      (isBrowser ? (globalThis as any).crossOriginIsolated === true : true),
 
     simd: WebAssembly.validate(
       new Uint8Array([
@@ -53,6 +59,10 @@ export function detect() {
         11, 11,
       ])
     ),
+
+    isBrowser,
+    isNode,
+    isBun,
   };
 }
 
@@ -61,14 +71,26 @@ export async function create(options: SolverOptions = {}): Promise<Solver> {
   const features = detect();
   const variant = options.variant ?? (features.threads ? "mt" : "st");
 
+  // Use native FFI for Bun (much faster than WASM)
+  if (isBun && options.variant !== "st") {
+    const { NativeSolver } = await import("./native.ts");
+    return new NativeSolver() as unknown as Solver;
+  }
+
   // wasm is inlined as base64 in the mjs (SINGLE_FILE build)
+  // Use Node-specific build for Node when MT is requested
   const mod = variant === "mt"
-    ? await import("../dist/highs.mt.mjs")
+    ? isNode
+      ? await import("../dist/highs.mt.node.mjs")
+      : await import("../dist/highs.mt.mjs")
     : await import("../dist/highs.st.mjs");
 
   const module = await mod.default();
   return new Solver(module, options);
 }
+
+// Native FFI solver for Bun (sync, no async needed)
+export { NativeSolver, createNative } from "./native.ts";
 
 // Worker-based solver creation for browsers (non-blocking)
 export { SolverClient as WorkerSolver } from "./client.ts";

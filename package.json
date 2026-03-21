@@ -8,20 +8,31 @@
       "import": "./dist/index.mjs"
     },
     "./st": "./dist/highs.st.mjs",
-    "./mt": "./dist/highs.mt.mjs",
-    "./debug": "./dist/highs.debug.mjs"
+    "./mt": {
+      "bun": "./dist/highs.mt.node.mjs",
+      "node": "./dist/highs.mt.node.mjs",
+      "default": "./dist/highs.mt.mjs"
+    },
+    "./debug": "./dist/highs.debug.mjs",
+    "./native": {
+      "bun": "./src/native.ts",
+      "default": "./src/native.ts"
+    }
   },
   "types": "./dist/index.d.ts",
   "main": "./dist/index.mjs",
   "files": [
-    "dist/"
+    "dist/",
+    "src/native.ts"
   ],
   "sideEffects": false,
   "scripts": {
     "build:wasm:st": "./build/build-st.sh",
     "build:wasm:mt": "./build/build-mt.sh",
+    "build:wasm:mt-node": "./build/build-mt-node.sh",
     "build:wasm:debug": "./build/build-debug.sh",
-    "build:wasm": "bun run build:wasm:st && bun run build:wasm:mt",
+    "build:wasm": "bun run build:wasm:st && bun run build:wasm:mt && bun run build:wasm:mt-node",
+    "build:native": "./build/build-native.sh",
     "build:worker:st": "bun build ./src/worker-st.ts --outfile dist/worker.st.js --target browser --format esm --minify",
     "build:worker:mt": "bun build ./src/worker-mt.ts --outfile dist/worker.mt.js --target browser --format esm --minify",
     "build:worker": "bun run build:worker:st && bun run build:worker:mt",

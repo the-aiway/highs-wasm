@@ -15,6 +15,21 @@ test("create solver and get version", async () => {
   console.log("HiGHS version:", version);
 });
 
+// MT solver works in Bun but has compatibility issues with bun test due to
+// Bun's node:worker_threads implementation of Atomics.waitAsync.
+// The solver itself works - see manual test: bun --eval "import('./src/index.ts').then(m => m.create({variant:'mt'}))"
+test.skip("create MT solver (Bun/Node)", async () => {
+  const solver = await create({ variant: "mt" });
+  const version = solver.version();
+  expect(version).toMatch(/^v?\d+\.\d+\.\d+/);
+
+  const x = solver.addVar({ lb: 0, ub: 10, cost: 1 });
+  solver.setObjectiveSense("maximize");
+  const result = solver.solve();
+  expect(result.status).toBe("Optimal");
+  expect(result.objectiveValue).toBeCloseTo(10);
+});
+
 test("solve simple LP", async () => {
   // Maximize: x + 2y
   // Subject to:
