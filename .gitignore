@@ -10,6 +10,7 @@ build/st/
 build/mt/
 build/debug/
 build/native/
+build/native-*/
 
 # test artifacts
 test-results/
