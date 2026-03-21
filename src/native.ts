@@ -1,14 +1,35 @@
-import { dlopen, FFIType, ptr, CString, toArrayBuffer } from "bun:ffi";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { existsSync } from "fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const libPath = process.platform === "darwin"
-  ? join(__dirname, "../dist/libhighs.dylib")
-  : join(__dirname, "../dist/libhighs.so");
+function getLibPath() {
+  const platform = process.platform;
+  const arch = process.arch;
 
-const lib = dlopen(libPath, {
+  if (platform === "darwin") {
+    if (arch === "arm64") return join(__dirname, "../dist/libhighs-darwin-arm64.dylib");
+    if (arch === "x64") return join(__dirname, "../dist/libhighs-darwin-x64.dylib");
+    return join(__dirname, "../dist/libhighs.dylib");
+  }
+  if (platform === "linux") {
+    if (arch === "x64") return join(__dirname, "../dist/libhighs-linux-x64.so");
+    if (arch === "arm64") return join(__dirname, "../dist/libhighs-linux-arm64.so");
+    return join(__dirname, "../dist/libhighs.so");
+  }
+  return null;
+}
+
+const libPath = getLibPath();
+export const nativeAvailable = libPath !== null && existsSync(libPath);
+
+if (!nativeAvailable) {
+  // Export stubs that throw - actual implementation below is guarded
+}
+
+const lib = nativeAvailable ? dlopen(libPath!, {
   Highs_create: { returns: FFIType.ptr },
   Highs_destroy: { args: [FFIType.ptr], returns: FFIType.void },
   Highs_version: { returns: FFIType.cstring },
@@ -186,7 +207,7 @@ const lib = dlopen(libPath, {
     ],
     returns: FFIType.i32,
   },
-});
+}) : null;
 
 // Constants
 const kHighsObjSenseMinimize = 1;
@@ -222,6 +243,7 @@ export class NativeSolver {
   private numRows = 0;
 
   constructor() {
+    if (!lib) throw new Error("Native HiGHS library not available for this platform");
     this.highs = lib.symbols.Highs_create() as number;
     if (!this.highs) throw new Error("Failed to create HiGHS instance");
   }

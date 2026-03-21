@@ -71,16 +71,19 @@ export async function create(options: SolverOptions = {}): Promise<Solver> {
   const features = detect();
   const variant = options.variant ?? (features.threads ? "mt" : "st");
 
-  // Use native FFI for Bun (much faster than WASM)
+  // Use native FFI for Bun if available (much faster than WASM)
   if (isBun && options.variant !== "st") {
-    const { NativeSolver } = await import("./native.ts");
-    return new NativeSolver() as unknown as Solver;
+    const { nativeAvailable, NativeSolver } = await import("./native.ts");
+    if (nativeAvailable) {
+      return new NativeSolver() as unknown as Solver;
+    }
+    // Fallback to Node-compatible WASM if native not available
   }
 
   // wasm is inlined as base64 in the mjs (SINGLE_FILE build)
-  // Use Node-specific build for Node when MT is requested
+  // Use Node-specific build for Node/Bun when MT is requested
   const mod = variant === "mt"
-    ? isNode
+    ? (isNode || isBun)
       ? await import("../dist/highs.mt.node.mjs")
       : await import("../dist/highs.mt.mjs")
     : await import("../dist/highs.st.mjs");
@@ -90,7 +93,7 @@ export async function create(options: SolverOptions = {}): Promise<Solver> {
 }
 
 // Native FFI solver for Bun (sync, no async needed)
-export { NativeSolver, createNative } from "./native.ts";
+export { NativeSolver, createNative, nativeAvailable } from "./native.ts";
 
 // Worker-based solver creation for browsers (non-blocking)
 export { SolverClient as WorkerSolver } from "./client.ts";
