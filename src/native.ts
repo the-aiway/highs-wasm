@@ -1,4 +1,4 @@
-import { dlopen, FFIType, ptr } from "bun:ffi";
+import { dlopen, FFIType, ptr, type Pointer } from "bun:ffi";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
@@ -238,29 +238,31 @@ const MODEL_STATUS = [
 ] as const;
 
 export class NativeSolver {
-  private highs: number;
+  private highs: Pointer;
   private numCols = 0;
   private numRows = 0;
+  #lib: NonNullable<typeof lib>;
 
   constructor() {
     if (!lib) throw new Error("Native HiGHS library not available for this platform");
-    this.highs = lib.symbols.Highs_create() as number;
+    this.#lib = lib;
+    this.highs = this.#lib.symbols.Highs_create() as Pointer;
     if (!this.highs) throw new Error("Failed to create HiGHS instance");
   }
 
   version() {
-    const major = lib.symbols.Highs_versionMajor() as number;
-    const minor = lib.symbols.Highs_versionMinor() as number;
-    const patch = lib.symbols.Highs_versionPatch() as number;
+    const major = this.#lib.symbols.Highs_versionMajor() as number;
+    const minor = this.#lib.symbols.Highs_versionMinor() as number;
+    const patch = this.#lib.symbols.Highs_versionPatch() as number;
     return `${major}.${minor}.${patch}`;
   }
 
   get numCol() {
-    return lib.symbols.Highs_getNumCol(this.highs) as number;
+    return this.#lib.symbols.Highs_getNumCol(this.highs) as number;
   }
 
   get numRow() {
-    return lib.symbols.Highs_getNumRow(this.highs) as number;
+    return this.#lib.symbols.Highs_getNumRow(this.highs) as number;
   }
 
   getNumCols() { return this.numCol; }
@@ -271,10 +273,10 @@ export class NativeSolver {
     const first = this.numCols;
     for (let i = 0; i < n; i++) {
       const colIdx = this.numCols++;
-      const status = lib.symbols.Highs_addCol(this.highs, opts.costs?.[i] ?? 0, opts.lb[i]!, opts.ub[i]!, 0, null, null);
+      const status = this.#lib.symbols.Highs_addCol(this.highs, opts.costs?.[i] ?? 0, opts.lb[i]!, opts.ub[i]!, 0, null, null);
       if (status !== 0) throw new Error(`Failed to add variable ${colIdx}: status ${status}`);
       if (opts.types && opts.types[i] === kHighsVarTypeInteger) {
-        lib.symbols.Highs_changeColIntegrality(this.highs, colIdx, kHighsVarTypeInteger);
+        this.#lib.symbols.Highs_changeColIntegrality(this.highs, colIdx, kHighsVarTypeInteger);
       }
     }
     return first;
@@ -287,7 +289,7 @@ export class NativeSolver {
 
     const colIdx = this.numCols++;
 
-    const status = lib.symbols.Highs_addCol(
+    const status = this.#lib.symbols.Highs_addCol(
       this.highs,
       cost,
       lb,
@@ -300,7 +302,7 @@ export class NativeSolver {
     if (status !== 0) throw new Error(`Failed to add variable: status ${status}`);
 
     if (opts.type === "integer") {
-      lib.symbols.Highs_changeColIntegrality(this.highs, colIdx, kHighsVarTypeInteger);
+      this.#lib.symbols.Highs_changeColIntegrality(this.highs, colIdx, kHighsVarTypeInteger);
     }
 
     return colIdx;
@@ -323,7 +325,7 @@ export class NativeSolver {
     const indexArr = new Int32Array(vars);
     const valueArr = new Float64Array(coeffs);
 
-    const status = lib.symbols.Highs_addRow(
+    const status = this.#lib.symbols.Highs_addRow(
       this.highs,
       lb,
       ub,
@@ -339,22 +341,22 @@ export class NativeSolver {
 
   setObjectiveSense(sense: "minimize" | "maximize") {
     const senseVal = sense === "maximize" ? kHighsObjSenseMaximize : kHighsObjSenseMinimize;
-    lib.symbols.Highs_changeObjectiveSense(this.highs, senseVal);
+    this.#lib.symbols.Highs_changeObjectiveSense(this.highs, senseVal);
   }
 
   setOption(name: string, value: number | string | boolean) {
     const cname = Buffer.from(name + "\0");
     if (typeof value === "boolean") {
-      lib.symbols.Highs_setBoolOptionValue(this.highs, ptr(cname), value ? 1 : 0);
+      this.#lib.symbols.Highs_setBoolOptionValue(this.highs, ptr(cname), value ? 1 : 0);
     } else if (typeof value === "number") {
       if (Number.isInteger(value)) {
-        lib.symbols.Highs_setIntOptionValue(this.highs, ptr(cname), value);
+        this.#lib.symbols.Highs_setIntOptionValue(this.highs, ptr(cname), value);
       } else {
-        lib.symbols.Highs_setDoubleOptionValue(this.highs, ptr(cname), value);
+        this.#lib.symbols.Highs_setDoubleOptionValue(this.highs, ptr(cname), value);
       }
     } else {
       const cval = Buffer.from(value + "\0");
-      lib.symbols.Highs_setStringOptionValue(this.highs, ptr(cname), ptr(cval));
+      this.#lib.symbols.Highs_setStringOptionValue(this.highs, ptr(cname), ptr(cval));
     }
   }
 
@@ -364,13 +366,13 @@ export class NativeSolver {
     if (opts?.mipRelGap !== undefined) this.setOption("mip_rel_gap", opts.mipRelGap);
     if (opts?.threads !== undefined) this.setOption("threads", opts.threads);
 
-    const status = lib.symbols.Highs_run(this.highs);
+    const status = this.#lib.symbols.Highs_run(this.highs);
     // 0 = OK, 1 = Warning (e.g. time limit with feasible solution), 2+ = Error
     if (status > 1) throw new Error(`Solve failed with status ${status}`);
 
-    const modelStatus = lib.symbols.Highs_getModelStatus(this.highs) as number;
+    const modelStatus = this.#lib.symbols.Highs_getModelStatus(this.highs) as number;
     const statusName = MODEL_STATUS[modelStatus] ?? "Unknown";
-    const objectiveValue = lib.symbols.Highs_getObjectiveValue(this.highs) as number;
+    const objectiveValue = this.#lib.symbols.Highs_getObjectiveValue(this.highs) as number;
 
     const numCols = this.numCol;
     const numRows = this.numRow;
@@ -380,7 +382,7 @@ export class NativeSolver {
     const rowValue = new Float64Array(numRows);
     const rowDual = new Float64Array(numRows);
 
-    lib.symbols.Highs_getSolution(
+    this.#lib.symbols.Highs_getSolution(
       this.highs,
       ptr(colValue),
       ptr(colDual),
@@ -400,21 +402,21 @@ export class NativeSolver {
   }
 
   clear() {
-    lib.symbols.Highs_clearModel(this.highs);
+    this.#lib.symbols.Highs_clearModel(this.highs);
     this.numCols = 0;
     this.numRows = 0;
   }
 
   reset() {
-    lib.symbols.Highs_clear(this.highs);
+    this.#lib.symbols.Highs_clear(this.highs);
     this.numCols = 0;
     this.numRows = 0;
   }
 
   [Symbol.dispose]() {
     if (this.highs) {
-      lib.symbols.Highs_destroy(this.highs);
-      this.highs = 0;
+      this.#lib.symbols.Highs_destroy(this.highs);
+      this.highs = null as unknown as Pointer;
     }
   }
 

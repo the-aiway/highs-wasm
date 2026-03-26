@@ -18,6 +18,8 @@ import { HiGHSError } from "./types.ts";
 // Static import - will be inlined by bundler
 import createModule from "../dist/highs.mt.mjs";
 
+declare const self: DedicatedWorkerGlobalScope;
+
 type WorkerMessage =
   | { id: number; cmd: "init"; verbose?: boolean }
   | { id: number; cmd: "addVar"; options: AddVarOptions }
@@ -73,7 +75,7 @@ async function handleMessage(msg: WorkerMessage): Promise<WorkerResponse> {
     switch (cmd) {
       case "init": {
         if (!modulePromise) {
-          modulePromise = createModule();
+          modulePromise = createModule() as Promise<HighsModule>;
         }
         const module = await modulePromise;
         solver = new Solver(module, { verbose: msg.verbose });

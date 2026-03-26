@@ -17,6 +17,8 @@ import {
   HiGHSError,
 } from "./types.ts";
 
+declare const self: DedicatedWorkerGlobalScope;
+
 type WorkerMessage =
   | { id: number; cmd: "init"; variant: "st" | "mt"; verbose?: boolean }
   | { id: number; cmd: "addVar"; options: AddVarOptions }
@@ -58,10 +60,10 @@ async function loadModule(variant: "st" | "mt"): Promise<HighsModule> {
   // Dynamic import based on variant
   if (variant === "mt") {
     const { default: createModule } = await import("../dist/highs.mt.mjs");
-    return createModule();
+    return createModule() as Promise<HighsModule>;
   } else {
     const { default: createModule } = await import("../dist/highs.st.mjs");
-    return createModule();
+    return createModule() as Promise<HighsModule>;
   }
 }
 

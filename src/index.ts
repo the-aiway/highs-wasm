@@ -31,9 +31,10 @@ export {
 
 import { Solver } from "./solver.ts";
 import type { SolverOptions } from "./types.ts";
+import type { HighsModule } from "./c-api.ts";
 
 // Runtime detection
-const isBrowser = typeof window !== "undefined";
+const isBrowser = typeof globalThis !== "undefined" && "window" in globalThis;
 const isNode = typeof process !== "undefined" && process.versions?.node;
 const isBun = typeof process !== "undefined" && process.versions?.bun;
 
@@ -88,7 +89,7 @@ export async function create(options: SolverOptions = {}): Promise<Solver> {
       : await import("../dist/highs.mt.mjs")
     : await import("../dist/highs.st.mjs");
 
-  const module = await mod.default();
+  const module = await mod.default() as HighsModule;
   return new Solver(module, options);
 }
 

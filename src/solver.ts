@@ -579,12 +579,12 @@ export class Solver implements Disposable {
           next: async (): Promise<IteratorResult<ProgressUpdate>> => {
             // Return any buffered updates first
             if (index < updates.length) {
-              return { value: updates[index++], done: false };
+              return { value: updates[index++]!, done: false as const };
             }
 
             // If solve is complete or cancelled, we're done
             if (solveComplete || cancelled) {
-              return { value: undefined as any, done: true };
+              return { value: undefined, done: true as const };
             }
 
             // Wait for more updates
@@ -594,10 +594,10 @@ export class Solver implements Disposable {
 
             // Check again after waking
             if (index < updates.length) {
-              return { value: updates[index++], done: false };
+              return { value: updates[index++]!, done: false as const };
             }
 
-            return { value: undefined as any, done: true };
+            return { value: undefined, done: true as const };
           },
         };
       },

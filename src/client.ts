@@ -398,11 +398,11 @@ export class SolverClient implements Disposable {
         return {
           next: async (): Promise<IteratorResult<ProgressUpdate>> => {
             if (index < updates.length) {
-              return { value: updates[index++], done: false };
+              return { value: updates[index++]!, done: false as const };
             }
 
             if (completed || cancelled) {
-              return { value: undefined as any, done: true };
+              return { value: undefined, done: true as const };
             }
 
             await new Promise<void>((resolve) => {
@@ -410,10 +410,10 @@ export class SolverClient implements Disposable {
             });
 
             if (index < updates.length) {
-              return { value: updates[index++], done: false };
+              return { value: updates[index++]!, done: false as const };
             }
 
-            return { value: undefined as any, done: true };
+            return { value: undefined, done: true as const };
           },
         };
       },

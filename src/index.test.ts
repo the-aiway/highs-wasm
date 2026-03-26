@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { create, detect, InfeasibleError, UnboundedError, HiGHSError } from "./index.ts";
+import type { VarRef, ConRef } from "./types.ts";
 
 test("detect features", () => {
   const features = detect();
@@ -111,7 +112,7 @@ test("bulk add variables", async () => {
 
   const firstVar = solver.addVars({ lb, ub, costs });
 
-  expect(firstVar).toBe(0);
+  expect(firstVar).toBe(0 as VarRef);
   expect(solver.numCols).toBe(n);
 });
 
@@ -127,7 +128,7 @@ test("bulk add variables with integrality", async () => {
 
   const firstVar = solver.addVars({ lb, ub, costs, types });
 
-  expect(firstVar).toBe(0);
+  expect(firstVar).toBe(0 as VarRef);
   expect(solver.numCols).toBe(n);
 
   // Add constraint: sum of all vars <= 3
@@ -165,7 +166,7 @@ test("bulk add constraints", async () => {
     values: new Float64Array([1, 1, 1, 1]),
   });
 
-  expect(firstCon).toBe(0);
+  expect(firstCon).toBe(0 as ConRef);
   expect(solver.numRows).toBe(2);
 });
 
