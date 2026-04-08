@@ -1,5 +1,5 @@
 {
-  "name": "highs-wasm",
+  "name": "@the-aiway/highs-wasm",
   "version": "0.2.1",
   "type": "module",
   "exports": {
@@ -26,6 +26,13 @@
     "src/native.ts"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/the-aiway/highs-wasm.git"
+  },
   "scripts": {
     "build:wasm:st": "./build/build-st.sh",
     "build:wasm:mt": "./build/build-mt.sh",
@@ -41,7 +48,12 @@
     "build": "bun run build:wasm && bun run build:js",
     "test": "bun test src/",
     "test:e2e": "bunx playwright test",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "bump:patch": "npm version patch -m 'chore: bump version to %s' && git push && git push --tags && npm publish",
+    "bump:minor": "npm version minor -m 'chore: bump version to %s' && git push && git push --tags && npm publish",
+    "bump:major": "npm version major -m 'chore: bump version to %s' && git push && git push --tags && npm publish",
+    "bump:patch:rc": "npm version prepatch --preid rc -m 'chore: bump candidate to %s' && git push && git push --tags && npm publish --tag beta",
+    "bump:rc": "npm version prerelease --preid rc -m 'chore: bump candidate to %s' && git push && git push --tags && npm publish --tag beta"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
@@ -51,5 +63,4 @@
   "peerDependencies": {
     "typescript": "^5"
   },
-  "private": true
 }
