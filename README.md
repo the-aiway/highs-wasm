@@ -2,6 +2,28 @@
 
 A modern WebAssembly build of the [HiGHS](https://github.com/ERGO-Code/HiGHS) linear programming solver.
 
+## Why this fork?
+
+The existing [`highs-js`](https://github.com/lovasoa/highs-js) npm package has problems that make it unusable for non-trivial models:
+
+- **Crashes on real models** — OOM aborts, stack overflows, assertion failures due to broken emscripten config: no `ALLOW_MEMORY_GROWTH`, tiny default stack, outdated HiGHS version pinned to `fcfb534`
+- **String-only API** — forces LP/MPS format serialization/parsing; no programmatic model building
+- **Blocks the main thread** — no Web Worker support; the UI freezes during solves
+- **Stale maintenance** — open issues for corrupted builds and wrong C API signatures go unaddressed
+
+HiGHS itself is excellent — pure C++11, no dependencies, clean C API, MIT licensed. The wrapper just needed fixing.
+
+### Alternatives considered
+
+| Option | Why rejected |
+|--------|-------------|
+| `highs-js` (lovasoa) | Root cause of the issues above — broken build config, not just API surface |
+| Native FFI via Bun (`bun:ffi` + `dlopen`) | Works great in Bun/Node server environments; ships as `highs-wasm/native`. But can't run in browsers, so WASM remains the primary target |
+| Zig as compiler toolchain | Emscripten is the right tool here — it handles pthreads, wasm exception handling, and JS glue that Zig's wasm target doesn't |
+| Rewrite HiGHS in another language | Unnecessary — the C++ solver is solid; only the JS wrapper needed work |
+
+This package fixes all of the above: correct emscripten flags, a TypeScript builder API, non-blocking Worker-based solves, MIP progress streaming, and multi-threaded solving when `crossOriginIsolated` is available.
+
 ## Installation
 
 ```bash
