@@ -62,5 +62,5 @@
   },
   "peerDependencies": {
     "typescript": "^5"
-  },
+  }
 }
