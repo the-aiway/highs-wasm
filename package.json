@@ -20,18 +20,22 @@
       "bun": "./dist/highs.mt.node.mjs",
       "node": "./dist/highs.mt.node.mjs",
       "default": "./dist/highs.mt.mjs"
-    },
-    "./debug": "./dist/highs.debug.mjs",
-    "./native": {
-      "bun": "./src/native.ts",
-      "default": "./src/native.ts"
     }
   },
   "types": "./dist/index.d.ts",
   "main": "./dist/index.mjs",
   "files": [
-    "dist/",
-    "src/native.ts"
+    "dist/index.mjs",
+    "dist/index.d.ts",
+    "dist/lazy.mjs",
+    "dist/lazy.d.ts",
+    "dist/node.mjs",
+    "dist/node.d.ts",
+    "dist/highs.st.mjs",
+    "dist/highs.mt.mjs",
+    "dist/highs.mt.node.mjs",
+    "dist/worker.st.js",
+    "dist/worker.mt.js"
   ],
   "sideEffects": false,
   "publishConfig": {
