@@ -120,9 +120,15 @@ export interface StreamingSolve {
   progress: ProgressController;
 }
 
+export type SolverVariant = "st" | "mt";
+export type SolverAssetUrl = string | URL;
+export type VariantAssetUrl = SolverAssetUrl | Partial<Record<SolverVariant, SolverAssetUrl>>;
+
 export interface SolverOptions {
-  variant?: "st" | "mt";
+  variant?: SolverVariant;
   verbose?: boolean; // Enable HiGHS output (default: false)
+  moduleUrl?: VariantAssetUrl;
+  workerUrl?: VariantAssetUrl;
 }
 
 // Error classes

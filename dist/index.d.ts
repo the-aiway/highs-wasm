@@ -18,6 +18,9 @@ export type {
   ProgressController,
   StreamingSolve,
   SolverOptions,
+  SolverVariant,
+  SolverAssetUrl,
+  VariantAssetUrl,
 } from "./types.ts";
 
 // Error classes
@@ -31,6 +34,11 @@ export {
 
 import { Solver } from "./solver.ts";
 import type { SolverOptions } from "./types.ts";
+import type { HighsModule } from "./c-api.ts";
+import { resolveVariantUrl } from "./asset-urls.ts";
+
+// Runtime detection
+const isBrowser = typeof globalThis !== "undefined" && "window" in globalThis;
 
 // Feature detection
 export function detect() {
@@ -38,7 +46,8 @@ export function detect() {
     threads:
       typeof SharedArrayBuffer !== "undefined" &&
       typeof Atomics !== "undefined" &&
-      (globalThis as any).crossOriginIsolated === true,
+      // Browser requires crossOriginIsolated, Node/Bun don't
+      (isBrowser ? (globalThis as any).crossOriginIsolated === true : true),
 
     simd: WebAssembly.validate(
       new Uint8Array([
@@ -53,20 +62,30 @@ export function detect() {
         11, 11,
       ])
     ),
+
+    isBrowser,
   };
 }
 
-// Direct (sync) solver creation for Node.js or same-thread usage
+// Browser-first solver creation.
 export async function create(options: SolverOptions = {}): Promise<Solver> {
   const features = detect();
   const variant = options.variant ?? (features.threads ? "mt" : "st");
 
-  // wasm is inlined as base64 in the mjs (SINGLE_FILE build)
-  const mod = variant === "mt"
-    ? await import("../dist/highs.mt.mjs")
-    : await import("../dist/highs.st.mjs");
+  // Resolve module URL: user-supplied override first, then static import
+  const moduleUrl = resolveVariantUrl(options.moduleUrl, variant);
 
-  const module = await mod.default();
+  let mod: { default: (opts?: object) => Promise<HighsModule> };
+  if (moduleUrl) {
+    // Dynamic runtime import from user-supplied URL (browser-style)
+    mod = await import(/* @vite-ignore */ moduleUrl);
+  } else if (variant === "mt") {
+    mod = await import("../dist/highs.mt.mjs");
+  } else {
+    mod = await import("../dist/highs.st.mjs");
+  }
+
+  const module = await mod.default() as HighsModule;
   return new Solver(module, options);
 }
 

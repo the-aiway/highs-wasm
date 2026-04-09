@@ -10,6 +10,8 @@ import type {
   SolveResult,
   SolveOptions,
   SolverOptions,
+  SolverVariant,
+  VariantAssetUrl,
   ProgressUpdate,
   StreamingSolve,
   ProgressController,
@@ -24,6 +26,7 @@ import {
   ModelError,
   isOptimalStatus,
 } from "./types.ts";
+import { defaultWorkerUrl, resolveVariantUrl } from "./asset-urls.ts";
 
 interface SerializedResult {
   status: SolveStatus;
@@ -100,23 +103,6 @@ function reconstructError(errorClass: string | undefined, message: string): Erro
   }
 }
 
-// Worker code is inlined as raw strings by the bundler
-// @ts-ignore - raw import
-import workerStCode from "../dist/worker.st.js" with { type: "text" };
-// @ts-ignore - raw import
-import workerMtCode from "../dist/worker.mt.js" with { type: "text" };
-
-const workerBlobUrls: Record<string, string> = {};
-
-function getWorkerBlobUrl(variant: "st" | "mt"): string {
-  if (!workerBlobUrls[variant]) {
-    const code = variant === "mt" ? workerMtCode : workerStCode;
-    const blob = new Blob([code], { type: "application/javascript" });
-    workerBlobUrls[variant] = URL.createObjectURL(blob);
-  }
-  return workerBlobUrls[variant];
-}
-
 export class SolverClient implements Disposable {
   #worker: Worker | null = null;
   #messageId = 0;
@@ -136,8 +122,8 @@ export class SolverClient implements Disposable {
   async #init(): Promise<void> {
     const variant = this.#options.variant ?? (detectThreadSupport() ? "mt" : "st");
 
-    // Create worker from inlined Blob URL
-    const workerUrl = getWorkerBlobUrl(variant);
+    // Resolve worker URL: user-supplied override first, then package default
+    const workerUrl = resolveVariantUrl(this.#options.workerUrl, variant) ?? defaultWorkerUrl(variant);
     this.#worker = new Worker(workerUrl, { type: "module" });
 
     this.#worker.onmessage = (e) => {

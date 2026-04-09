@@ -7,6 +7,14 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
+    "./lazy": {
+      "types": "./dist/lazy.d.ts",
+      "import": "./dist/lazy.mjs"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.mjs"
+    },
     "./st": "./dist/highs.st.mjs",
     "./mt": {
       "bun": "./dist/highs.mt.node.mjs",
@@ -41,10 +49,12 @@
     "build:wasm": "bun run build:wasm:st && bun run build:wasm:mt && bun run build:wasm:mt-node",
     "build:native": "./build/build-native.sh",
     "build:native:all": "./build/build-native-cross.sh linux-x64 && ./build/build-native-cross.sh linux-arm64 && ./build/build-native-cross.sh darwin-x64 && ./build/build-native.sh",
-    "build:worker:st": "bun build ./src/worker-st.ts --outfile dist/worker.st.js --target browser --format esm --minify",
-    "build:worker:mt": "bun build ./src/worker-mt.ts --outfile dist/worker.mt.js --target browser --format esm --minify",
-    "build:worker": "bun run build:worker:st && bun run build:worker:mt",
-    "build:js": "bun run build:worker && bun build ./src/index.ts --outdir dist --target browser --format esm --splitting --external '../dist/*.mjs' && mv dist/index.js dist/index.mjs && sed -i '' 's|../dist/highs|./highs|g' dist/index.mjs && cp src/index.ts dist/index.d.ts",
+    "build:worker:st": "./build.ts worker-st",
+    "build:worker:mt": "./build.ts worker-mt",
+    "build:worker": "./build.ts worker",
+    "build:lazy": "./build.ts lazy",
+    "build:node": "./build.ts node",
+    "build:js": "./build.ts",
     "build": "bun run build:wasm && bun run build:js",
     "test": "bun test src/",
     "test:e2e": "bunx playwright test",
