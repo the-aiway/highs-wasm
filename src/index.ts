@@ -18,6 +18,9 @@ export type {
   ProgressController,
   StreamingSolve,
   SolverOptions,
+  SolverVariant,
+  SolverAssetUrl,
+  VariantAssetUrl,
 } from "./types.ts";
 
 // Error classes
@@ -32,11 +35,10 @@ export {
 import { Solver } from "./solver.ts";
 import type { SolverOptions } from "./types.ts";
 import type { HighsModule } from "./c-api.ts";
+import { resolveVariantUrl } from "./asset-urls.ts";
 
 // Runtime detection
 const isBrowser = typeof globalThis !== "undefined" && "window" in globalThis;
-const isNode = typeof process !== "undefined" && process.versions?.node;
-const isBun = typeof process !== "undefined" && process.versions?.bun;
 
 // Feature detection
 export function detect() {
@@ -62,39 +64,30 @@ export function detect() {
     ),
 
     isBrowser,
-    isNode,
-    isBun,
   };
 }
 
-// Direct (sync) solver creation for Node.js or same-thread usage
+// Browser-first solver creation.
 export async function create(options: SolverOptions = {}): Promise<Solver> {
   const features = detect();
   const variant = options.variant ?? (features.threads ? "mt" : "st");
 
-  // Use native FFI for Bun if available (much faster than WASM)
-  if (isBun && options.variant !== "st") {
-    const { nativeAvailable, NativeSolver } = await import("./native.ts");
-    if (nativeAvailable) {
-      return new NativeSolver() as unknown as Solver;
-    }
-    // Fallback to Node-compatible WASM if native not available
-  }
+  // Resolve module URL: user-supplied override first, then static import
+  const moduleUrl = resolveVariantUrl(options.moduleUrl, variant);
 
-  // wasm is inlined as base64 in the mjs (SINGLE_FILE build)
-  // Use Node-specific build for Node/Bun when MT is requested
-  const mod = variant === "mt"
-    ? (isNode || isBun)
-      ? await import("../dist/highs.mt.node.mjs")
-      : await import("../dist/highs.mt.mjs")
-    : await import("../dist/highs.st.mjs");
+  let mod: { default: (opts?: object) => Promise<HighsModule> };
+  if (moduleUrl) {
+    // Dynamic runtime import from user-supplied URL (browser-style)
+    mod = await import(/* @vite-ignore */ moduleUrl);
+  } else if (variant === "mt") {
+    mod = await import("../dist/highs.mt.mjs");
+  } else {
+    mod = await import("../dist/highs.st.mjs");
+  }
 
   const module = await mod.default() as HighsModule;
   return new Solver(module, options);
 }
-
-// Native FFI solver for Bun (sync, no async needed)
-export { NativeSolver, createNative, nativeAvailable } from "./native.ts";
 
 // Worker-based solver creation for browsers (non-blocking)
 export { SolverClient as WorkerSolver } from "./client.ts";

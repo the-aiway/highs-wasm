@@ -1,5 +1,7 @@
 import { test, expect } from "bun:test";
 import { create, detect, InfeasibleError, UnboundedError, HiGHSError } from "./index.ts";
+import { create as createLazy } from "./lazy.ts";
+import { create as createNode } from "./node.ts";
 import type { VarRef, ConRef } from "./types.ts";
 
 test("detect features", () => {
@@ -14,6 +16,18 @@ test("create solver and get version", async () => {
   const version = solver.version();
   expect(version).toMatch(/^v?\d+\.\d+\.\d+/);
   console.log("HiGHS version:", version);
+});
+
+test("lazy entry requires moduleUrl", async () => {
+  await expect(createLazy({ variant: "st" } as any)).rejects.toThrow(
+    "moduleUrl is required when using highs-wasm/lazy"
+  );
+});
+
+test("node entry creates solver and gets version", async () => {
+  await using solver = await createNode({ variant: "st" });
+  const version = solver.version();
+  expect(version).toMatch(/^v?\d+\.\d+\.\d+/);
 });
 
 // MT solver works in Bun but has compatibility issues with bun test due to

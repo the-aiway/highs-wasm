@@ -2,6 +2,45 @@
 
 A modern WebAssembly build of the [HiGHS](https://github.com/ERGO-Code/HiGHS) linear programming solver.
 
+## Which Entry Should I Import?
+
+Use the package subpath that matches your environment:
+
+| Import | Use for | Notes |
+|--------|---------|-------|
+| `highs-wasm` | Browser apps, default path | Browser-first entry with zero-config hosted package assets |
+| `highs-wasm/lazy` | Browser apps that host large assets themselves | Pass `moduleUrl` and `workerUrl` so the heavy files stay out of your app bundle |
+| `highs-wasm/node` | Bun/Node runtimes | Node/Bun-specific entry, including the native fast path where available |
+
+### Browser Default
+
+```ts
+import { create, SolverClient } from "highs-wasm";
+```
+
+### Browser With Self-Hosted Assets
+
+```ts
+import { create, SolverClient } from "highs-wasm/lazy";
+
+const solver = await create({
+  moduleUrl: "/assets/highs.st.mjs",
+});
+
+const workerSolver = new SolverClient({
+  workerUrl: {
+    st: "/assets/worker.st.js",
+    mt: "/assets/worker.mt.js",
+  },
+});
+```
+
+### Bun / Node
+
+```ts
+import { create } from "highs-wasm/node";
+```
+
 ## Why this fork?
 
 The existing [`highs-js`](https://github.com/lovasoa/highs-js) npm package has problems that make it unusable for non-trivial models:
@@ -34,6 +73,8 @@ bun add github:abelcha/highs-wasm
 
 ## Quick Start
 
+### Browser
+
 ```typescript
 import { create } from "highs-wasm";
 
@@ -60,6 +101,35 @@ if (result.isOptimal) {
   console.log("x =", result.value(x));
   console.log("y =", result.value(y));
 }
+```
+
+### Bun / Node
+
+```typescript
+import { create } from "highs-wasm/node";
+
+await using solver = await create();
+```
+
+### Browser With External Hosted Assets
+
+Use `highs-wasm/lazy` when you want to serve the large `.mjs` or worker assets yourself with CDN caching or compression.
+
+```typescript
+import { create, SolverClient } from "highs-wasm/lazy";
+
+await using solver = await create({
+  variant: "st",
+  moduleUrl: "/assets/highs.st.mjs",
+});
+
+await using workerSolver = new SolverClient({
+  variant: "mt",
+  workerUrl: {
+    st: "/assets/worker.st.js",
+    mt: "/assets/worker.mt.js",
+  },
+});
 ```
 
 ## Features
@@ -92,6 +162,10 @@ const solver = await create({ variant: "mt" });
 // Enable verbose logging
 const solver = await create({ verbose: true });
 ```
+
+For Bun or Node, import from `highs-wasm/node` instead.
+
+For externally hosted browser assets, import from `highs-wasm/lazy` and pass `moduleUrl`.
 
 ### Variables
 
@@ -290,11 +364,15 @@ const x = await solver.addVar({ lb: 0, ub: 10, cost: 1 });
 const result = await solver.solve(); // Non-blocking
 ```
 
+If you host worker files yourself, use `highs-wasm/lazy` and pass `workerUrl`.
+
 ## Build Variants
 
 | Export | Size | Features |
 |--------|------|----------|
-| `highs-wasm` | 3.6MB | Auto-detects ST/MT |
+| `highs-wasm` | 3.6MB | Browser-first default entry |
+| `highs-wasm/lazy` | tiny entry | Browser entry for externally hosted assets |
+| `highs-wasm/node` | runtime entry | Bun/Node-specific entry with native path support |
 | `highs-wasm/st` | 3.6MB | Single-threaded, works everywhere |
 | `highs-wasm/mt` | 3.7MB | Multi-threaded, requires `crossOriginIsolated` |
 | `highs-wasm/debug` | 37MB | Debug assertions, memory checks |
