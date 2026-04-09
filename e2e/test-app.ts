@@ -184,7 +184,10 @@ async function runAllTests() {
 
   // Test 8: SolverClient (worker-based API)
   await runTest("SolverClient works in Web Worker", async () => {
-    await using solver = new SolverClient({ variant: "st" });
+    await using solver = new SolverClient({
+      variant: "st",
+      workerUrl: "/dist/worker.st.js",
+    });
     await solver.ready();
 
     const x = await solver.addVar({ lb: 0, ub: 10, cost: 1 });
